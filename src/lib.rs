@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "std"), no_std)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 //! Arc based Rcu implementation based on my implementation in [mthom/scryer-prolog#1980](https://github.com/mthom/scryer-prolog/pull/1980)
@@ -10,42 +11,44 @@
 
 extern crate alloc;
 
-use core::{fmt::Debug, mem::ManuallyDrop, ops::Deref, ptr::NonNull, sync::atomic::{AtomicPtr, AtomicU8}, cell::OnceCell};
+use core::{
+    fmt::Debug,
+    mem::ManuallyDrop,
+    ops::Deref,
+    ptr::NonNull,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
-use alloc::sync::{Arc, Weak};
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 
-// TODO find a no_std RwLock
-use std::sync::RwLock;
-
-// the epoch counters of all threads that have ever accessed an Rcu
-// threads that have finished will have a dangling Weak reference and can be cleaned up
-// having this be shared between all Rcu's is a tradeof:
-// - writes will be slower as more epoch counters need to be waited for
-// - reads should be faster as a thread only needs to register itself once on the first read
-static EPOCH_COUNTERS: RwLock<Vec<Weak<AtomicU8>>> = RwLock::new(Vec::new());
-
-thread_local! {
-    // odd value means the current thread is about to access the active_epoch of an Rcu
-    // - threads observing this while leaving the write critical section will need to wait for this to change to a different (odd or even) value
-    // a thread has a single epoch counter for all Rcu it accesses, as a thread can only access one Rcu at a time
-    static THREAD_EPOCH_COUNTER: OnceCell<Arc<AtomicU8>> = const { OnceCell::new() };
-}
+mod epoch_counters;
+pub use epoch_counters::EpochCounter;
 
 pub struct Rcu<T> {
     active_value: AtomicPtr<T>,
 }
 
-impl<T: std::fmt::Debug> std::fmt::Debug for Rcu<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let active_epoch = self.read();
+#[cfg(feature = "std")]
+impl<T: core::fmt::Display> core::fmt::Display for Rcu<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let data = self.read();
+        core::fmt::Display::fmt(&data.deref(), f)
+    }
+}
+
+#[cfg(feature = "std")]
+impl<T: core::fmt::Debug> core::fmt::Debug for Rcu<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Rcu")
-            .field("active_value", &active_epoch)
+            .field("active_value", &self.read())
             .finish()
     }
 }
 
 impl<T> Rcu<T> {
-
     pub fn new(initial_value: T) -> Self {
         Self::from_arc(Arc::new(initial_value))
     }
@@ -70,21 +73,38 @@ impl<T> Rcu<T> {
     /// 3. atomically load the arc pointer
     /// 4. atomically increment the arc strong count
     /// 5. atomically increment the epoch counter (by one from odd back to even)
+    #[cfg(feature = "std")]
     pub fn read(&self) -> RcuRef<T, T> {
-        THREAD_EPOCH_COUNTER.with(|epoch_counter| {
+        let arc = epoch_counters::THREAD_EPOCH_COUNTER.with(|epoch_counter| {
             let epoch_counter = epoch_counter.get_or_init(|| {
-                let epoch_counter = Arc::new(AtomicU8::new(0));
+                let epoch_counter = Arc::new(EpochCounter::new());
+
                 // register the current threads epoch counter on init
-                EPOCH_COUNTERS.write().unwrap()
-                    .push(Arc::downgrade(&epoch_counter));
+                epoch_counters::EPOCH_COUNTERS.write().unwrap().push(Arc::downgrade(&epoch_counter));
+
                 epoch_counter
             });
 
-            let old = epoch_counter.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            assert!(old % 2 == 0, "Old Epoch counter value should be even!");
+            // Safety:
+            // - we just registered the epoch counter
+            // - this is a thread local epoch counter that is only used here, so there can't be a concurrent use
+            unsafe { self.raw_read(epoch_counter) }
         });
 
-        let arc_ptr = self.active_value.load(std::sync::atomic::Ordering::Acquire);
+        RcuRef {
+            data: arc.deref().into(),
+            arc,
+        }
+    }
+
+    /// ## Safety
+    /// - The epoch counter mut be even and may not be used concurrently
+    /// - The epoch counter must be made available to write operations
+    #[inline]
+    pub unsafe fn raw_read(&self, epoch_counter: &EpochCounter) -> Arc<T> {
+        epoch_counter.enter_rcs();
+
+        let arc_ptr = self.active_value.load(Ordering::Acquire);
 
         // Safety: See comments inside the block
         let arc = unsafe {
@@ -100,17 +120,9 @@ impl<T> Rcu<T> {
             Arc::from_raw(arc_ptr)
         };
 
-        THREAD_EPOCH_COUNTER.with(|epoch_counter| {
-            let old = epoch_counter
-                .get().expect("we initialized the OnceCell when we incremented the epoch counter the fist time")
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            assert!(old % 2 != 0, "Old Epoch counter value should be odd!");
-        });
+        epoch_counter.leave_rcs();
 
-        RcuRef {
-            data: arc.deref().into(),
-            arc,
-        }
+        arc
     }
 
     /// Create a new Arc containing the new value and replace the Rcu's current arc.
@@ -123,6 +135,7 @@ impl<T> Rcu<T> {
     /// ## Returns
     /// The replaced Arc
     ///
+    #[cfg(feature = "std")]
     pub fn replace(&self, new_value: T) -> Arc<T> {
         self.replace_arc(Arc::new(new_value))
     }
@@ -135,11 +148,24 @@ impl<T> Rcu<T> {
     /// This will block until the old value can be reclaimed,
     /// i.e. all threads witnessed to be in the read critical sections
     /// have been witnessed to have left the critical section at least once
+    #[cfg(feature = "std")]
+    #[inline]
     pub fn replace_arc(&self, new_value: Arc<T>) -> Arc<T> {
-        let arc_ptr = self.active_value.swap(
-            Arc::into_raw(new_value).cast_mut(),
-            std::sync::atomic::Ordering::AcqRel,
-        );
+        unsafe { self.raw_replace_arc(new_value, || epoch_counters::EPOCH_COUNTERS.read().unwrap().clone()) }
+    }
+
+    /// ## Safety
+    /// - `get_epoch_counters` must return a vector containing all epoch counters used with this Rcu that are odd at the time it is called
+    /// - the vector may contain more epoch counters than required, i.e. epoch counters that are even and epoch counters in use with this Rcu
+    #[inline]
+    pub unsafe fn raw_replace_arc(
+        &self,
+        new_value: Arc<T>,
+        get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>>,
+    ) -> Arc<T> {
+        let arc_ptr = self
+            .active_value
+            .swap(Arc::into_raw(new_value).cast_mut(), Ordering::AcqRel);
 
         // manually drop as we need to ensure not to drop the arc while
         // we have not witnessed all threads to be or have been outside the read critical section
@@ -151,12 +177,13 @@ impl<T> Rcu<T> {
 
         // Get the current state of the epoch counters,
         // we can only drop the old value once we have observed all to be even or to have changed
-        let epochs = EPOCH_COUNTERS.read().unwrap().clone();
+        let epochs = get_epoch_counters();
+
         let mut epochs = epochs
             .into_iter()
             .flat_map(|elem| {
                 let arc = elem.upgrade()?;
-                let init_val = arc.load(std::sync::atomic::Ordering::Acquire);
+                let init_val = arc.get_epoch();
                 if init_val % 2 == 0 {
                     // already even can be ignored
                     return None;
@@ -177,7 +204,7 @@ impl<T> Rcu<T> {
                 // any different value is ok as
                 // - even values indicate the thread is outside of the critical section
                 // - a different odd value indicates the thread has left the critical section and can subsequently only read the new active_value
-                arc.load(std::sync::atomic::Ordering::Acquire) == elem.0
+                arc.get_epoch() == elem.0
             })
         }
 
@@ -199,7 +226,7 @@ where
 }
 
 impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RcuRef")
             .field("data", &self.deref())
             .finish()
@@ -209,7 +236,10 @@ impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
 // use associated functions rather than methods so that we don't overlap
 // with functions of the Deref Target type
 impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
-    pub fn map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> &'a N>(reference: Self, f: F) -> RcuRef<T, N> {
+    pub fn map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> &'a N>(
+        reference: Self,
+        f: F,
+    ) -> RcuRef<T, N> {
         RcuRef {
             arc: reference.arc,
             // Safety: See deref
