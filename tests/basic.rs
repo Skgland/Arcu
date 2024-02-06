@@ -7,7 +7,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 #[test]
 fn replace() {
-    let rcu = arcu::Rcu::new(11);
+    let rcu = arcu::Arcu::new(11);
     assert_eq!(rcu.read().deref(), &11);
     rcu.replace(55);
     assert_eq!(rcu.read().deref(), &55);
@@ -17,7 +17,7 @@ fn replace() {
 fn raw_replace() {
     use alloc::sync::Arc;
 
-    let rcu = arcu::Rcu::new(22);
+    let rcu = arcu::Arcu::new(22);
 
     let epoch_counters = [Arc::new(EpochCounter::new())];
 

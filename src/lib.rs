@@ -27,12 +27,12 @@ use alloc::{
 mod epoch_counters;
 pub use epoch_counters::EpochCounter;
 
-pub struct Rcu<T> {
+pub struct Arcu<T> {
     active_value: AtomicPtr<T>,
 }
 
 #[cfg(feature = "std")]
-impl<T: core::fmt::Display> core::fmt::Display for Rcu<T> {
+impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let data = self.read();
         core::fmt::Display::fmt(&data.deref(), f)
@@ -40,7 +40,7 @@ impl<T: core::fmt::Display> core::fmt::Display for Rcu<T> {
 }
 
 #[cfg(feature = "std")]
-impl<T: core::fmt::Debug> core::fmt::Debug for Rcu<T> {
+impl<T: core::fmt::Debug> core::fmt::Debug for Arcu<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Rcu")
             .field("active_value", &self.read())
@@ -48,14 +48,14 @@ impl<T: core::fmt::Debug> core::fmt::Debug for Rcu<T> {
     }
 }
 
-impl<T> Rcu<T> {
+impl<T> Arcu<T> {
     pub fn new(initial_value: T) -> Self {
         Self::from_arc(Arc::new(initial_value))
     }
 
     #[inline]
     pub fn from_arc(initial: Arc<T>) -> Self {
-        Rcu {
+        Arcu {
             active_value: AtomicPtr::new(Arc::into_raw(initial).cast_mut()),
         }
     }
@@ -98,7 +98,7 @@ impl<T> Rcu<T> {
     }
 
     /// ## Safety
-    /// - The epoch counter mut be even and may not be used concurrently
+    /// - The epoch counter must not be used concurrently
     /// - The epoch counter must be made available to write operations
     #[inline]
     pub unsafe fn raw_read(&self, epoch_counter: &EpochCounter) -> Arc<T> {
