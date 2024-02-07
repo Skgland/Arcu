@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ops::Deref, sync::{Arc, Mutex, RwLock}};
+use std::{ops::Deref, sync::{Arc, RwLock}};
 
 use arcu::epoch_counters::EpochCounter;
 
@@ -6,11 +6,29 @@ extern crate alloc;
 
 #[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
 #[test]
-fn replace() {
+fn std_replace() {
     let rcu = arcu::Arcu::new(11);
     assert_eq!(rcu.read().deref(), &11);
     rcu.replace(55);
     assert_eq!(rcu.read().deref(), &55);
+}
+
+
+#[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
+#[test]
+fn std_update() {
+    let rcu = arcu::Arcu::new(0);
+    assert_eq!(rcu.read().deref(), &0);
+
+    std::thread::scope(|scope| {
+        for _ in 0..100 {
+            scope.spawn(|| {
+                rcu.try_update(|old | { Some(Arc::new(old + 1)) })
+            });
+        }
+    });
+
+    assert_eq!(rcu.read().deref(), &100);
 }
 
 #[test]
@@ -45,7 +63,7 @@ fn raw_replace() {
 }
 
 #[test]
-fn raw_update() {
+fn raw_update1() {
     let rcu = arcu::Arcu::new(RwLock::new(0));
 
     let epoch_counters: [_; 100] = std::array::from_fn(|idx| (Arc::new(EpochCounter::new()), Arc::new(RwLock::new(idx))));

@@ -78,7 +78,7 @@ impl<T> Arcu<T> {
     /// 5. atomically increment the epoch counter (by one from odd back to even)
     #[cfg(feature = "thread_local_counter")]
     pub fn read(&self) -> RcuRef<T, T> {
-        let arc = epoch_counters::with_thread_local_epoch_counter(|epoch_counter| {
+        let arc = crate::epoch_counters::with_thread_local_epoch_counter(|epoch_counter| {
             // Safety:
             // - we just registered the epoch counter
             // - this is a thread local epoch counter that is only used here, so there can't be a concurrent use
@@ -147,7 +147,7 @@ impl<T> Arcu<T> {
     pub fn replace_arc(&self, new_value: Arc<T>) -> Arc<T> {
         // Safety:
         // - we are using global counters
-        unsafe { self.raw_replace_arc(new_value, epoch_counters::global_counters) }
+        unsafe { self.raw_replace_arc(new_value, crate::epoch_counters::global_counters) }
     }
 
     /// ## Safety
@@ -184,11 +184,11 @@ impl<T> Arcu<T> {
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
     /// Aborts when the update function returns None
     #[cfg(feature = "thread_local_counter")]
-    pub fn try_update(&self, update: impl FnMut(&T) -> Option<T>) -> Option<Arc<T>> {
+    pub fn try_update(&self, update: impl FnMut(&T) -> Option<Arc<T>>) -> Option<Arc<T>> {
         // Safety:
         // epoch_counter is thread local and as such can't be in use concurrently
         // get_epoch_counters returns the list of all registered epoch counters
-        epoch_counters::with_thread_local_epoch_counter(|epoch_counter| unsafe {
+        crate::epoch_counters::with_thread_local_epoch_counter(|epoch_counter| unsafe {
             self.raw_try_update(update, epoch_counter, crate::epoch_counters::global_counters)
         })
     }

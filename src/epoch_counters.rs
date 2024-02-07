@@ -15,7 +15,7 @@ pub fn register_epoch_counter(epoch_counter: alloc::sync::Weak<EpochCounter>) {
 }
 
 #[cfg(feature = "global_counters")]
-pub fn global_counters() -> Vec<alloc::sync::Weak<EpochCounter>>{
+pub fn global_counters() -> Vec<::alloc::sync::Weak<EpochCounter>>{
     GLOBAL_EPOCH_COUNTERS.read().unwrap().clone()
 }
 

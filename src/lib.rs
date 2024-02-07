@@ -9,6 +9,8 @@
 //! Arcu
 //! ```
 
+extern crate alloc;
+
 pub mod epoch_counters;
 pub mod arcu;
 
