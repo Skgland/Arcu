@@ -6,6 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
+global_counters = ["std"]
+thread_local_counter = ["std", "global_counters"]
 std = []
 
 [dependencies]
