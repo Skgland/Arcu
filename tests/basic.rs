@@ -1,34 +1,43 @@
-use std::{ops::Deref, sync::{Arc, RwLock}};
+use std::{
+    fmt::Debug, ops::Deref, sync::{Arc, RwLock}
+};
 
 use arcu::epoch_counters::EpochCounter;
 
 extern crate alloc;
 
+
+struct Loud<T: Debug>(T);
+
+impl<T: Debug> Drop for Loud<T> {
+    fn drop(&mut self) {
+        println!("Dropping: {:?}", self.0);
+    }
+}
+
 #[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
 #[test]
 fn std_replace() {
-    let rcu = arcu::Arcu::new(11);
-    assert_eq!(rcu.read().deref(), &11);
-    rcu.replace(55);
-    assert_eq!(rcu.read().deref(), &55);
+    let rcu = arcu::Arcu::new(Loud(11));
+    assert_eq!(rcu.read().0, 11);
+    rcu.replace(Loud(55));
+    assert_eq!(rcu.read().0, 55);
 }
-
 
 #[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
 #[test]
 fn std_update() {
-    let rcu = arcu::Arcu::new(0);
-    assert_eq!(rcu.read().deref(), &0);
+    let rcu = arcu::Arcu::new(Loud((0,0)));
+    let rcu_ref = &rcu;
+    assert_eq!(rcu.read().0, (0,0));
 
     std::thread::scope(|scope| {
-        for _ in 0..100 {
-            scope.spawn(|| {
-                rcu.try_update(|old | { Some(Arc::new(old + 1)) })
-            });
+        for idx in 0..100 {
+            scope.spawn(move || rcu_ref.try_update(|old| Some(Arc::new(Loud((idx,old.0.1 + 1))))));
         }
     });
 
-    assert_eq!(rcu.read().deref(), &100);
+    assert_eq!(rcu.read().0.1, 100);
 }
 
 #[test]
@@ -49,9 +58,7 @@ fn raw_replace() {
             let new = Arc::new(idx);
             scope.spawn(|| {
                 let to_drop = unsafe {
-                    rcu.raw_replace_arc(new, || {
-                        epoch_counters.iter().map(Arc::downgrade).collect()
-                    })
+                    rcu.raw_replace(new, || epoch_counters.iter().map(Arc::downgrade).collect())
                 };
                 println!("Dropping: {to_drop}");
             });
@@ -66,7 +73,8 @@ fn raw_replace() {
 fn raw_update1() {
     let rcu = arcu::Arcu::new(RwLock::new(0));
 
-    let epoch_counters: [_; 100] = std::array::from_fn(|idx| (Arc::new(EpochCounter::new()), Arc::new(RwLock::new(idx))));
+    let epoch_counters: [_; 100] =
+        std::array::from_fn(|idx| (Arc::new(EpochCounter::new()), Arc::new(RwLock::new(idx))));
     let epoch_counters_ref: &_ = &epoch_counters;
 
     std::thread::scope(|scope| {
@@ -81,7 +89,12 @@ fn raw_update1() {
                             Some(arc.clone())
                         },
                         epoch_counter.deref(),
-                        || epoch_counters_ref.iter().map(|(counter,_)|Arc::downgrade(counter)).collect(),
+                        || {
+                            epoch_counters_ref
+                                .iter()
+                                .map(|(counter, _)| Arc::downgrade(counter))
+                                .collect()
+                        },
                     )
                 };
                 if let Some(to_drop) = to_drop {
@@ -99,10 +112,9 @@ fn raw_update1() {
     drop(epoch_counters);
 }
 
-
 #[test]
 fn raw_update2() {
-    let rcu = arcu::Arcu::new(0);
+    let rcu = arcu::Arcu::new(Arc::new(0));
 
     let epoch_counters: [_; 100] = std::array::from_fn(|_idx| Arc::new(EpochCounter::new()));
     let epoch_counters_ref: &_ = &epoch_counters;
@@ -112,9 +124,9 @@ fn raw_update2() {
             scope.spawn(|| {
                 let to_drop = unsafe {
                     rcu.raw_try_update(
-                        |old| {
+                        |old: &usize| {
                             println!("Old: {old}");
-                            Some(Arc::new(old+1))
+                            Some(Arc::new(old + 1))
                         },
                         epoch_counter.deref(),
                         || epoch_counters_ref.iter().map(Arc::downgrade).collect(),

@@ -15,6 +15,7 @@ use alloc::{
 
 use crate::epoch_counters::EpochCounter;
 
+
 pub struct Arcu<T> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw
@@ -52,14 +53,11 @@ impl<T: core::fmt::Debug> core::fmt::Debug for Arcu<T> {
 /// - The safe read operations assume that the writer will observe `epoch_counters::THREAD_EPOCH_COUNTER`, see `epoch_counters::with_thread_local_epoch_counter`.
 /// - The safe writers assume that the readers will use one of the epoch counters in `epoch_counters::GLOBAL_EPOCH_COUNTERS`, see `epoch_counters::register_epoch_counter`.
 impl<T> Arcu<T> {
-    pub fn new(initial_value: T) -> Self {
-        Self::from_arc(Arc::new(initial_value))
-    }
 
     #[inline]
-    pub fn from_arc(initial: Arc<T>) -> Self {
+    pub fn new(initial: impl Into<Arc<T>>) -> Self {
         Arcu {
-            active_value: AtomicPtr::new(Arc::into_raw(initial).cast_mut()),
+            active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
         }
     }
 
@@ -100,6 +98,8 @@ impl<T> Arcu<T> {
 
         let arc_ptr = self.active_value.load(Ordering::Acquire);
 
+        core::sync::atomic::fence(Ordering::SeqCst);
+
         // Safety: See comments inside the block
         let arc = unsafe {
             // Safety:
@@ -114,24 +114,11 @@ impl<T> Arcu<T> {
             Arc::from_raw(arc_ptr)
         };
 
+        core::sync::atomic::fence(Ordering::SeqCst);
+
         epoch_counter.leave_rcs();
 
         arc
-    }
-
-    /// Create a new Arc containing the new value and replace the Rcu's current arc.
-    ///
-    /// Concurrent replace operations will behave as if serialized into some order.
-    ///
-    /// ## Blocking
-    /// The replace operation will block until all epoch counters have been observed to be even or to have changed
-    ///
-    /// ## Returns
-    /// The replaced Arc
-    ///
-    #[cfg(feature = "global_counters")]
-    pub fn replace(&self, new_value: T) -> Arc<T> {
-        self.replace_arc(Arc::new(new_value))
     }
 
     /// Replace the Rcu's content with a new value
@@ -144,17 +131,17 @@ impl<T> Arcu<T> {
     /// have been witnessed to have left the critical section at least once
     #[inline]
     #[cfg(feature = "global_counters")]
-    pub fn replace_arc(&self, new_value: Arc<T>) -> Arc<T> {
+    pub fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         // Safety:
         // - we are using global counters
-        unsafe { self.raw_replace_arc(new_value, crate::epoch_counters::global_counters) }
+        unsafe { self.raw_replace(new_value.into(), crate::epoch_counters::global_counters) }
     }
 
     /// ## Safety
     /// - `get_epoch_counters` must return a vector containing all epoch counters used with this Rcu that are odd at the time it is called
     /// - the vector may contain more epoch counters than required, i.e. epoch counters that are even and epoch counters in use with this Rcu
     #[inline]
-    pub unsafe fn raw_replace_arc(
+    pub unsafe fn raw_replace(
         &self,
         new_value: Arc<T>,
         get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>>,
@@ -184,12 +171,15 @@ impl<T> Arcu<T> {
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
     /// Aborts when the update function returns None
     #[cfg(feature = "thread_local_counter")]
-    pub fn try_update(&self, update: impl FnMut(&T) -> Option<Arc<T>>) -> Option<Arc<T>> {
+    pub fn try_update<F, R>(&self, mut update: F) -> Option<Arc<T>>
+    where
+    F: FnMut(&T) -> Option<R>,
+    R: Into<Arc<T>>{
         // Safety:
         // epoch_counter is thread local and as such can't be in use concurrently
         // get_epoch_counters returns the list of all registered epoch counters
         crate::epoch_counters::with_thread_local_epoch_counter(|epoch_counter| unsafe {
-            self.raw_try_update(update, epoch_counter, crate::epoch_counters::global_counters)
+            self.raw_try_update(move |old| update(old).map(Into::into), epoch_counter, crate::epoch_counters::global_counters)
         })
     }
 
