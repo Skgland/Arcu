@@ -2,7 +2,7 @@ use std::{
     fmt::Debug, ops::Deref, sync::{Arc, RwLock}
 };
 
-use arcu::epoch_counters::EpochCounter;
+use arcu::{Rcu, epoch_counters::EpochCounter};
 
 extern crate alloc;
 
@@ -41,10 +41,19 @@ fn std_update() {
 }
 
 #[test]
-fn raw_replace() {
-    use alloc::sync::Arc;
+fn raw_replace_atomic() {
+    raw_replace::<arcu::atomic::Arcu<_>>()
+}
 
-    let rcu = arcu::Arcu::new(201);
+
+#[test]
+fn raw_replace_rwlock() {
+    raw_replace::<arcu::rwlock::Arcu<_>>()
+}
+
+fn raw_replace<Arcu: Rcu<Item = i32> + Send + Sync>() {
+
+    let rcu = Arcu::new(201);
 
     let epoch_counters: [_; 1] = std::array::from_fn(|_| Arc::new(EpochCounter::new()));
 
@@ -70,11 +79,27 @@ fn raw_replace() {
 }
 
 #[test]
-fn raw_update1() {
-    let rcu = arcu::Arcu::new(RwLock::new(0));
+fn raw_update1_atomic(){
+    raw_update1::<arcu::atomic::Arcu<_>>()
+}
 
+#[test]
+fn raw_update1_rwlock(){
+    raw_update1::<arcu::rwlock::Arcu<_>>()
+}
+
+fn raw_update1<Arcu: Rcu<Item = RwLock<usize>> + Send + Sync>() {
+    let rcu = Arcu::new(RwLock::new(0));
+
+    #[cfg(not(miri))]
     let epoch_counters: [_; 100] =
         std::array::from_fn(|idx| (Arc::new(EpochCounter::new()), Arc::new(RwLock::new(idx))));
+
+        #[cfg(miri)]
+    let epoch_counters: [_; 100] =
+        std::array::from_fn(|idx| (Arc::new(EpochCounter::new()), Arc::new(RwLock::new(idx))));
+
+
     let epoch_counters_ref: &_ = &epoch_counters;
 
     std::thread::scope(|scope| {
@@ -112,9 +137,19 @@ fn raw_update1() {
     drop(epoch_counters);
 }
 
+
 #[test]
-fn raw_update2() {
-    let rcu = arcu::Arcu::new(Arc::new(0));
+fn raw_update2_atomic(){
+    raw_update2::<arcu::atomic::Arcu<_>>()
+}
+
+#[test]
+fn raw_update2_rwlock(){
+    raw_update2::<arcu::rwlock::Arcu<_>>()
+}
+
+fn raw_update2<Arcu: Rcu<Item = usize> + Send + Sync>() {
+    let rcu = Arcu::new(Arc::new(0));
 
     let epoch_counters: [_; 100] = std::array::from_fn(|_idx| Arc::new(EpochCounter::new()));
     let epoch_counters_ref: &_ = &epoch_counters;
