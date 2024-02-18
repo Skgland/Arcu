@@ -119,6 +119,6 @@ pub trait Rcu {
         &self,
         update: impl FnMut(&Self::Item) -> Option<Arc<Self::Item>>,
         epoch_counter: &EpochCounter,
-        get_epoch_counters: impl FnMut() -> Vec<Weak<EpochCounter>> + 'a,
+        get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<Self::Item>> ;
 }

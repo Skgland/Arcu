@@ -88,7 +88,7 @@ impl<T> Rcu for Arcu<T> {
         &self,
         mut update: impl FnMut(&T) -> Option<Arc<T>>,
         _epoch_counter: &EpochCounter,
-        _get_epoch_counters: impl FnMut() -> Vec<Weak<EpochCounter>> + 'a,
+        _get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<T>> {
 
         loop {

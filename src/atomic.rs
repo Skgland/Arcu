@@ -131,7 +131,7 @@ impl<T> Rcu for Arcu<T> {
         &self,
         mut update: impl FnMut(&T) -> Option<Arc<T>>,
         epoch_counter: &EpochCounter,
-        mut get_epoch_counters: impl FnMut() -> Vec<Weak<EpochCounter>> + 'a,
+        get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<T>> {
 
         loop {
@@ -147,7 +147,6 @@ impl<T> Rcu for Arcu<T> {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
-
 
             match result {
                 Ok(old2) => {
@@ -181,9 +180,8 @@ impl<T> Rcu for Arcu<T> {
                     //   as such they must have left the critical section at some point
                     return Some(ManuallyDrop::into_inner(arc));
                 }
-                Err(_) => {
+                Err(_new_old) => {
                     // Compare Exchange failed, reclaim the new arc we leaked with Arc::into_raw above
-                    wait_for_epochs(&mut get_epoch_counters);
 
                     // Safety:
                     // - the ptr was just created using Arc::into_raw
@@ -192,7 +190,6 @@ impl<T> Rcu for Arcu<T> {
                     // we haven't exchanged the references so we are still responsible to clean up one strong count of new
                     Arc::decrement_strong_count(new);
 
-                    // strong count ownership rcu(?): 1 old: 0 new: 0
                     continue;
                 }
             }
