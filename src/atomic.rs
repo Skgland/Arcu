@@ -1,7 +1,6 @@
 extern crate alloc;
 
 use core::sync::atomic::{AtomicPtr, Ordering};
-use std::mem::ManuallyDrop;
 
 use alloc::{
     sync::{Arc, Weak},
@@ -103,21 +102,14 @@ impl<T> Rcu for Arcu<T> {
             .active_value
             .swap(Arc::into_raw(new_value).cast_mut(), Ordering::AcqRel);
 
-        // manually drop as we need to ensure not to drop the arc while
-        // we have not witnessed all threads to be or have been outside the read critical section
-        // i.e. even epoch counter or different odd epoch counter
-        // Safety:
-        // - the ptr was created in Rcu::new or Rcu::replace with Arc::into_raw
-        // - the Rcu itself holds one strong count
-        let arc = unsafe { ManuallyDrop::new(Arc::from_raw(arc_ptr)) };
-
         wait_for_epochs(get_epoch_counters);
 
         // Safety:
-        // - we have not dropped the arc another way
+        // - the ptr was created in Arcu::new or Arcu::replace with Arc::into_raw
+        // - we took the strong count of the Rcu
         // - we witnessed all threads either with an even epoch count or with a new odd count,
         //   as such they must have left the critical section at some point
-        ManuallyDrop::into_inner(arc)
+        Arc::from_raw(arc_ptr)
     }
 
     /// Update the Rcu using the provided update function
@@ -133,7 +125,6 @@ impl<T> Rcu for Arcu<T> {
         epoch_counter: &EpochCounter,
         get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<T>> {
-
         loop {
             let old = self.raw_read(epoch_counter);
 
@@ -149,36 +140,21 @@ impl<T> Rcu for Arcu<T> {
             );
 
             match result {
-                Ok(old2) => {
-                    // rcu(?) was rcu(old) so we exchanged an old strong count ownership for a new strong count ownership
-                   assert_eq!(Arc::as_ptr(&old), old2);
-
+                Ok(old) => {
                     // Compare Exchange Succeeded, ensure the old Arc gets dropped after waiting for all readers to leave the read critical section
-                    //
-                    // manually drop as we need to ensure not to drop the arc while
-                    // we have not witnessed all threads to be or have been outside the read critical section
-                    // i.e. even epoch counter or different odd epoch counter
-                    // Safety:
-                    // - the ptr was created in Rcu::new or Rcu::replace with Arc::into_raw
-                    // - the Rcu itself holds one strong count
 
                     // we exchanged the old/new arc pointer
-                    // we are now responsible for the rcu strong count of old
-                    // in exchange for giving the rcu the responsibility of the strong count of new
-
-                    // reclaim the old arc from the pointer we exchanged
-                    let arc = unsafe { ManuallyDrop::new(Arc::from_raw(old2)) };
+                    // we are now responsible for one strong count of old,
+                    // in exchange for giving the rcu the responsibility of one strong count of new
 
                     wait_for_epochs(get_epoch_counters);
 
-                    // Note that we have one strong count more than at the beginning of the loop iteration
-                    // and it is now safe to drop arc so we can return it to the caller
-
                     // Safety:
-                    // - we have not dropped the arc another way
+                    // - the ptr was created in Arcu::new, Arcu::raw_replace, Arcu::raw_try_update with Arc::into_raw
+                    // - we took the strong count of the Arcu
                     // - we witnessed all threads either with an even epoch count or with a new odd count,
                     //   as such they must have left the critical section at some point
-                    return Some(ManuallyDrop::into_inner(arc));
+                    return Some(unsafe { Arc::from_raw(old) })
                 }
                 Err(_new_old) => {
                     // Compare Exchange failed, reclaim the new arc we leaked with Arc::into_raw above
@@ -188,7 +164,7 @@ impl<T> Rcu for Arcu<T> {
                     // - there still one strong count left
 
                     // we haven't exchanged the references so we are still responsible to clean up one strong count of new
-                    Arc::decrement_strong_count(new);
+                    let _ = unsafe { Arc::from_raw(new) };
 
                     continue;
                 }
