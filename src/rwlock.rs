@@ -1,79 +1,67 @@
 extern crate alloc;
 
+use std::{marker::PhantomData, sync::RwLock};
 
-use std::sync::RwLock;
+use alloc::
+    sync::Arc
+;
 
-use alloc::{
-    sync::{Arc, Weak},
-    vec::Vec,
-};
-
-use crate::epoch_counters::EpochCounter;
+use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
 
-pub struct Arcu<T> {
+pub struct Arcu<T, P> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw
     // - Arcu "owns" one strong reference count
     // active_value: AtomicPtr<T>,
     active_value: RwLock<Arc<T>>,
+    epoch_counter_pool: PhantomData<P>,
 }
 
-#[cfg(feature = "thread_local_counters")]
-impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
+impl<T: core::fmt::Display, P> core::fmt::Display for Arcu<T, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let data = self.read();
-        core::fmt::Display::fmt(&data.deref(), f)
+        T::fmt(&self.active_value.read().unwrap(), f)
     }
 }
 
-impl<T: core::fmt::Debug> core::fmt::Debug for Arcu<T> {
+impl<T: core::fmt::Debug, P> core::fmt::Debug for Arcu<T, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        #[cfg(feature = "thread_local_counters")]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &self.read().deref())
-                .finish();
-        }
-        #[cfg(not(feature = "thread_local_counters"))]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &"Opaque")
-                .finish()
-        }
+        f.debug_struct("Rcu")
+            .field("active_value", &self.active_value.read().unwrap())
+            .field("epoch_counter_pool", &"Opaque")
+            .finish()
     }
 }
 
-impl<T> Rcu for Arcu<T> {
+impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     type Item = T;
+    type Pool = P;
 
     #[inline]
-    fn new(initial: impl Into<Arc<T>>) -> Self {
+    fn new(initial: impl Into<Arc<T>>, _epoch_counter_pool: P) -> Self {
         Arcu {
             // active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
             active_value: RwLock::new(initial.into()),
+            epoch_counter_pool: PhantomData,
         }
     }
 
     /// ## Safety
-    /// - The epoch counter must not be used concurrently
-    /// - The epoch counter must be made available to write operations
+    /// - this impl is actually safe
     #[inline]
     unsafe fn raw_read(&self, _epoch_counter: &EpochCounter) -> Arc<T> {
         self.active_value.read().unwrap().clone()
     }
 
     /// ## Safety
-    /// - `get_epoch_counters` must return a vector containing all epoch counters used with this Rcu that are odd at the time it is called
-    /// - the vector may contain more epoch counters than required, i.e. epoch counters that are even and epoch counters in use with this Rcu
+    /// - this impl is actually safe
     #[inline]
-    unsafe fn raw_replace(
+    fn replace(
         &self,
-        new_value: Arc<T>,
-        _get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>>,
+        new_value: impl Into<Arc<T>>,
     ) -> Arc<T> {
-        std::mem::replace(&mut self.active_value.write().unwrap(), new_value)
+        std::mem::replace(&mut self.active_value.write().unwrap(), new_value.into())
     }
 
     /// Update the Rcu using the provided update function
@@ -81,30 +69,22 @@ impl<T> Rcu for Arcu<T> {
     /// Aborts when the update function returns None
     ///
     /// ## Safety
-    /// - `epoch_counter` must be valid for `raw_read`
-    /// - `get_epoch_counters` must be valid for `raw_replace`
+    /// - this impl is actually safe
     #[inline]
     unsafe fn raw_try_update<'a>(
         &self,
         mut update: impl FnMut(&T) -> Option<Arc<T>>,
         _epoch_counter: &EpochCounter,
-        _get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<T>> {
-
         loop {
             let old = self.active_value.read().unwrap().clone();
             let new = update(&old)?;
             let mut cur = self.active_value.write().unwrap();
             if Arc::ptr_eq(&cur, &old) {
-                return Some(std::mem::replace(&mut cur, new))
+                return Some(std::mem::replace(&mut cur, new));
             } else {
                 println!("Ptr neq, retry!")
             }
         }
     }
-}
-
-impl<T> Arcu<T> {
-
-
 }

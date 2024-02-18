@@ -2,20 +2,18 @@ extern crate alloc;
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 
-use alloc::{
-    sync::{Arc, Weak},
-    vec::Vec,
-};
+use alloc::sync::Arc;
 
-use crate::epoch_counters::EpochCounter;
+use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
 
-pub struct Arcu<T> {
+pub struct Arcu<T, P> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw
     // - Arcu "owns" one strong reference count
     active_value: AtomicPtr<T>,
+    epoch_counter_pool: P,
 }
 
 #[cfg(feature = "thread_local_counters")]
@@ -26,18 +24,20 @@ impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
     }
 }
 
-impl<T: core::fmt::Debug> core::fmt::Debug for Arcu<T> {
+impl<T: core::fmt::Debug, P> core::fmt::Debug for Arcu<T, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         #[cfg(feature = "thread_local_counters")]
         {
             f.debug_struct("Rcu")
                 .field("active_value", &self.read().deref())
+                .field("epoch_counter_pool", &"Opaque")
                 .finish();
         }
         #[cfg(not(feature = "thread_local_counters"))]
         {
             f.debug_struct("Rcu")
                 .field("active_value", &"Opaque")
+                .field("epoch_counter_pool", &"Opaque")
                 .finish()
         }
     }
@@ -47,13 +47,15 @@ impl<T: core::fmt::Debug> core::fmt::Debug for Arcu<T> {
 /// - When mixing safe and unsafe functions care needs to be taken that write operations see all Epochs used by concurrent read operations
 /// - The safe read operations assume that the writer will observe `epoch_counters::THREAD_EPOCH_COUNTER`, see `epoch_counters::with_thread_local_epoch_counter`.
 /// - The safe writers assume that the readers will use one of the epoch counters in `epoch_counters::GLOBAL_EPOCH_COUNTERS`, see `epoch_counters::register_epoch_counter`.
-impl<T> Rcu for Arcu<T> {
+impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     type Item = T;
+    type Pool = P;
 
     #[inline]
-    fn new(initial: impl Into<Arc<T>>) -> Self {
+    fn new(initial: impl Into<Arc<T>>, epoch_counter_pool: P) -> Self {
         Arcu {
             active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
+            epoch_counter_pool,
         }
     }
 
@@ -93,23 +95,18 @@ impl<T> Rcu for Arcu<T> {
     /// - `get_epoch_counters` must return a vector containing all epoch counters used with this Rcu that are odd at the time it is called
     /// - the vector may contain more epoch counters than required, i.e. epoch counters that are even and epoch counters in use with this Rcu
     #[inline]
-    unsafe fn raw_replace(
-        &self,
-        new_value: Arc<T>,
-        get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>>,
-    ) -> Arc<T> {
+    fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         let arc_ptr = self
             .active_value
-            .swap(Arc::into_raw(new_value).cast_mut(), Ordering::AcqRel);
-
-        wait_for_epochs(get_epoch_counters);
+            .swap(Arc::into_raw(new_value.into()).cast_mut(), Ordering::AcqRel);
+        self.epoch_counter_pool.wait_for_epochs();
 
         // Safety:
         // - the ptr was created in Arcu::new or Arcu::replace with Arc::into_raw
         // - we took the strong count of the Rcu
         // - we witnessed all threads either with an even epoch count or with a new odd count,
         //   as such they must have left the critical section at some point
-        Arc::from_raw(arc_ptr)
+        unsafe { Arc::from_raw(arc_ptr) }
     }
 
     /// Update the Rcu using the provided update function
@@ -123,7 +120,6 @@ impl<T> Rcu for Arcu<T> {
         &self,
         mut update: impl FnMut(&T) -> Option<Arc<T>>,
         epoch_counter: &EpochCounter,
-        get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>> + 'a,
     ) -> Option<Arc<T>> {
         loop {
             let old = self.raw_read(epoch_counter);
@@ -147,14 +143,14 @@ impl<T> Rcu for Arcu<T> {
                     // we are now responsible for one strong count of old,
                     // in exchange for giving the rcu the responsibility of one strong count of new
 
-                    wait_for_epochs(get_epoch_counters);
+                    self.epoch_counter_pool.wait_for_epochs();
 
                     // Safety:
                     // - the ptr was created in Arcu::new, Arcu::raw_replace, Arcu::raw_try_update with Arc::into_raw
                     // - we took the strong count of the Arcu
                     // - we witnessed all threads either with an even epoch count or with a new odd count,
                     //   as such they must have left the critical section at some point
-                    return Some(unsafe { Arc::from_raw(old) })
+                    return Some(unsafe { Arc::from_raw(old) });
                 }
                 Err(_new_old) => {
                     // Compare Exchange failed, reclaim the new arc we leaked with Arc::into_raw above
@@ -170,42 +166,5 @@ impl<T> Rcu for Arcu<T> {
                 }
             }
         }
-    }
-}
-
-// Safety:
-// This function must not return normally until all epoch counters have been witnessed to be even or to have changed
-fn wait_for_epochs(get_epoch_counters: impl FnOnce() -> Vec<Weak<EpochCounter>>) {
-    // Get the current state of the epoch counters,
-    // we can only drop the old value once we have observed all to be even or to have changed
-    let epochs = get_epoch_counters();
-
-    let mut epochs = epochs
-        .into_iter()
-        .flat_map(|elem| {
-            let arc = elem.upgrade()?;
-            let init_val = arc.get_epoch();
-            if init_val % 2 == 0 {
-                // already even can be ignored
-                return None;
-            }
-            // odd initial value thread is in the read critical section
-            // we need to wait for the value to change before we can drop the arc
-            Some((init_val, elem))
-        })
-        .collect::<Vec<_>>();
-
-    while !epochs.is_empty() {
-        epochs.retain(|elem| {
-            let Some(arc) = elem.1.upgrade() else {
-                // as the thread is dead it can't have a pointer to the old arc
-                return false;
-            };
-            // the epoch counter has not changed so the thread is still in the same instance of the critical section
-            // any different value is ok as
-            // - even values indicate the thread is outside of the critical section
-            // - a different odd value indicates the thread has left the critical section and can subsequently only read the new active_value
-            arc.get_epoch() == elem.0
-        })
     }
 }

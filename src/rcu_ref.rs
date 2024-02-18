@@ -22,6 +22,15 @@ impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
     }
 }
 
+impl<T:?Sized> RcuRef<T, T> {
+    pub fn new(arc: Arc<T>) -> Self {
+        Self {
+            data: arc.as_ref().into(),
+            arc,
+        }
+    }
+}
+
 // use associated functions rather than methods so that we don't overlap
 // with functions of the Deref Target type
 impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
