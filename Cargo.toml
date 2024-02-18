@@ -2,6 +2,12 @@
 name = "arcu"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.65.0"
+description = "An Rcu implementation using an Arc to keep the read critical section should and handle cleanup"
+repository = "https://github.com/Skgland/Arcu"
+license = "MIT OR Apache-2.0"
+keywords = ["rcu", "synchronization"]
+categories = ["no-std", "concurrency", "data-structures"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
