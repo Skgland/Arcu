@@ -30,7 +30,9 @@ jobs:
   build:
     strategy:
       matrix:
-        channel: ["stable", "beta", "nightly", "1.65.0"]
+        channel: ["stable", "beta", "1.65.0"]
+        include:
+          - { channel: "nightly", components: "miri"}
     needs: [lint]
 
     runs-on: ubuntu-latest
@@ -41,6 +43,7 @@ jobs:
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{matrix.channel}}
+        components: ${{matrix.components}}
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2.7.3
     - name: Build
