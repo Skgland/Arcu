@@ -92,9 +92,10 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     /// - the vector may contain more epoch counters than required, i.e. epoch counters that are even and epoch counters in use with this Rcu
     #[inline]
     fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
-        let arc_ptr = self
-            .active_value
-            .swap(Arc::into_raw(new_value.into()).cast_mut(), Ordering::Acquire);
+        let arc_ptr = self.active_value.swap(
+            Arc::into_raw(new_value.into()).cast_mut(),
+            Ordering::Acquire,
+        );
         self.epoch_counter_pool.wait_for_epochs();
 
         // Safety:
