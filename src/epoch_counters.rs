@@ -68,13 +68,13 @@ impl EpochCounter {
 
     #[inline]
     pub(crate) fn enter_rcs(&self) {
-        let old = self.0.fetch_add(1, Ordering::AcqRel);
+        let old = self.0.fetch_add(1, Ordering::Acquire);
         assert!(old % 2 == 0, "Old Epoch counter value should be even!");
     }
 
     #[inline]
     pub(crate) fn leave_rcs(&self) {
-        let old = self.0.fetch_add(1, Ordering::AcqRel);
+        let old = self.0.fetch_add(1, Ordering::Release);
         assert!(old % 2 != 0, "Old Epoch counter value should be odd!");
     }
 

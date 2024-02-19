@@ -66,9 +66,7 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     unsafe fn raw_read(&self, epoch_counter: &EpochCounter) -> Arc<T> {
         epoch_counter.enter_rcs();
 
-        let arc_ptr = self.active_value.load(Ordering::Acquire);
-
-        core::sync::atomic::fence(Ordering::SeqCst);
+        let arc_ptr = self.active_value.load(Ordering::SeqCst);
 
         // Safety: See comments inside the block
         let arc = unsafe {
@@ -84,8 +82,6 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
             Arc::from_raw(arc_ptr)
         };
 
-        core::sync::atomic::fence(Ordering::SeqCst);
-
         epoch_counter.leave_rcs();
 
         arc
@@ -98,7 +94,7 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         let arc_ptr = self
             .active_value
-            .swap(Arc::into_raw(new_value.into()).cast_mut(), Ordering::AcqRel);
+            .swap(Arc::into_raw(new_value.into()).cast_mut(), Ordering::Acquire);
         self.epoch_counter_pool.wait_for_epochs();
 
         // Safety:
@@ -128,11 +124,11 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
 
             // we now exchange the ownership of rcu(old) for rcu(new)
             // if rcu(?) is rcu(old)
-            let result = self.active_value.compare_exchange(
+            let result = self.active_value.compare_exchange_weak(
                 Arc::as_ptr(&old).cast_mut(),
                 new.cast_mut(),
                 Ordering::AcqRel,
-                Ordering::Acquire,
+                Ordering::Relaxed,
             );
 
             match result {
