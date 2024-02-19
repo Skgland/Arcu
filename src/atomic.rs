@@ -169,11 +169,11 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     }
 }
 
-impl<T, P>  Drop for Arcu<T, P> {
+impl<T, P> Drop for Arcu<T, P> {
     fn drop(&mut self) {
         // Safety:
         // - The Pointer was created by Arc::into_raw
         // - The Arcu is responsible for one strong count, so the string count is at least 1
-       unsafe { Arc::from_raw(self.active_value.load(Ordering::Acquire)) };
+        unsafe { Arc::from_raw(self.active_value.load(Ordering::Acquire)) };
     }
 }

@@ -2,7 +2,6 @@ use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 
 use alloc::sync::Arc;
 
-
 pub struct RcuRef<T, M>
 where
     T: ?Sized,
@@ -22,7 +21,7 @@ impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
     }
 }
 
-impl<T:?Sized> RcuRef<T, T> {
+impl<T: ?Sized> RcuRef<T, T> {
     pub fn new(arc: Arc<T>) -> Self {
         Self {
             data: arc.as_ref().into(),

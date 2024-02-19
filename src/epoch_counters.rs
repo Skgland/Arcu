@@ -1,5 +1,5 @@
-use core::sync::atomic::{AtomicU8, Ordering};
 use alloc::sync::{Arc, Weak};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 // the epoch counters of all threads that have ever accessed an Rcu
 // threads that have finished will have a dangling Weak reference and can be cleaned up
@@ -28,7 +28,6 @@ thread_local! {
     static THREAD_EPOCH_COUNTER: std::cell::OnceCell<std::sync::Arc<EpochCounter>> = const { std::cell::OnceCell::new() };
 }
 
-
 #[cfg(feature = "global_counters")]
 pub struct GlobalEpochCounterPool;
 
@@ -44,7 +43,6 @@ unsafe impl EpochCounterPool for GlobalEpochCounterPool {
 /// Per Thread: On first use registers the epoch counter
 #[cfg(feature = "thread_local_counter")]
 pub(crate) fn with_thread_local_epoch_counter<T>(fun: impl FnOnce(&EpochCounter) -> T) -> T {
-
     THREAD_EPOCH_COUNTER.with(|epoch_counter| {
         let epoch_counter = epoch_counter.get_or_init(|| {
             let epoch_counter = Arc::new(EpochCounter::new());
@@ -132,7 +130,7 @@ unsafe impl<F: Fn() -> Vec<Weak<EpochCounter>>> EpochCounterPool for F {
 
 // Safety:
 // `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
-unsafe impl<const N : usize> EpochCounterPool for [Arc<EpochCounter>;N] {
+unsafe impl<const N: usize> EpochCounterPool for [Arc<EpochCounter>; N] {
     fn wait_for_epochs(&self) {
         (|| self.iter().map(Arc::downgrade).collect::<Vec<_>>()).wait_for_epochs()
     }

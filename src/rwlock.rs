@@ -2,9 +2,7 @@ extern crate alloc;
 
 use std::{marker::PhantomData, sync::RwLock};
 
-use alloc::
-    sync::Arc
-;
+use alloc::sync::Arc;
 
 use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
@@ -57,10 +55,7 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
     /// ## Safety
     /// - this impl is actually safe
     #[inline]
-    fn replace(
-        &self,
-        new_value: impl Into<Arc<T>>,
-    ) -> Arc<T> {
+    fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         std::mem::replace(&mut self.active_value.write().unwrap(), new_value.into())
     }
 
