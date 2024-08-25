@@ -1,9 +1,13 @@
 extern crate alloc;
 
+#[cfg(feature = "thread_local_counter")]
+use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, Ordering};
 
 use alloc::sync::Arc;
 
+#[cfg(feature = "thread_local_counter")]
+use crate::epoch_counters::GlobalEpochCounterPool;
 use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
@@ -16,8 +20,8 @@ pub struct Arcu<T, P> {
     epoch_counter_pool: P,
 }
 
-#[cfg(feature = "thread_local_counters")]
-impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
+#[cfg(feature = "thread_local_counter")]
+impl<T: core::fmt::Display> core::fmt::Display for Arcu<T, GlobalEpochCounterPool> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let data = self.read();
         core::fmt::Display::fmt(&data.deref(), f)
@@ -26,20 +30,10 @@ impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
 
 impl<T: core::fmt::Debug, P> core::fmt::Debug for Arcu<T, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        #[cfg(feature = "thread_local_counters")]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &self.read().deref())
-                .field("epoch_counter_pool", &"Opaque")
-                .finish();
-        }
-        #[cfg(not(feature = "thread_local_counters"))]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &"Opaque")
-                .field("epoch_counter_pool", &"Opaque")
-                .finish()
-        }
+        f.debug_struct("Rcu")
+            .field("active_value", &"Opaque")
+            .field("epoch_counter_pool", &"Opaque")
+            .finish()
     }
 }
 
