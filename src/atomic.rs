@@ -1,3 +1,5 @@
+//! Thi module contains the atomic and Arc based Rcu
+
 extern crate alloc;
 
 #[cfg(feature = "thread_local_counter")]
@@ -12,6 +14,8 @@ use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
 
+/// A Rcu based on an atomic pointer to an [`Arc`] and a [`EpochCounterPool`]
+///
 pub struct Arcu<T, P> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw

@@ -1,5 +1,7 @@
 // #![cfg_attr(not(feature = "std"), no_std)]
+
 #![deny(clippy::undocumented_unsafe_blocks)]
+#![warn(missing_docs)]
 
 //! Arc based Rcu implementation based on my implementation in [mthom/scryer-prolog#1980](https://github.com/mthom/scryer-prolog/pull/1980)
 //!
@@ -23,10 +25,15 @@ pub mod rwlock;
 
 pub mod rcu_ref;
 
+/// An abstract Rcu to abstract over the atomic based [`atomic::Arcu`] and the RwLock based [`rwlock::Arcu`]
 pub trait Rcu {
+    /// The type contained in this Rcu
     type Item;
+
+    /// The type for the pool of epoch counters used by this Rcu
     type Pool: EpochCounterPool;
 
+    /// Create a new Rcu with the given initial value and epoch counter pool
     fn new(initial: impl Into<Arc<Self::Item>>, epoch_counter_pool: Self::Pool) -> Self;
 
     /// Read the value of the Rcu for the current epoch
