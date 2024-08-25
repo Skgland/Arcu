@@ -61,7 +61,11 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
     }
 
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.data == other.data
+        std::ptr::eq(this.data.as_ptr(), other.data.as_ptr())
+    }
+
+    pub fn ptr_addr_eq(this: &Self, other: &Self) -> bool {
+        std::ptr::addr_eq(this.data.as_ptr(), other.data.as_ptr())
     }
 
     #[allow(clippy::should_implement_trait)]
