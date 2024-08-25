@@ -1,4 +1,4 @@
-//!
+//! This module contais [`EpochCounter`], [`EpochCounterPool`] and related functionality.
 
 use alloc::sync::{Arc, Weak};
 use core::sync::atomic::{AtomicU8, Ordering};
