@@ -102,6 +102,12 @@ impl EpochCounter {
     }
 }
 
+impl Default for EpochCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// ## Safety
 /// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be even or to have changed
 ///
