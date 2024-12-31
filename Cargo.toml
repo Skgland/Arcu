@@ -2,7 +2,7 @@
 name = "arcu"
 version = "0.1.2"
 edition = "2021"
-rust-version = "1.65.0"
+rust-version = "1.76.0"
 description = "An Rcu implementation using an Arc to keep the read critical section short and handle cleanup"
 repository = "https://github.com/Skgland/Arcu"
 license = "MIT OR Apache-2.0"

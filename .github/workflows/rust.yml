@@ -32,7 +32,7 @@ jobs:
   build:
     strategy:
       matrix:
-        channel: ["stable", "beta", "1.65.0"]
+        channel: ["stable", "beta", "1.76.0"]
         include:
           - { channel: "nightly", components: "miri"}
     needs: [lint]
