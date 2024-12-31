@@ -1,23 +1,33 @@
+//! Thi module contains the atomic and Arc based Rcu
+
 extern crate alloc;
 
+#[cfg(feature = "thread_local_counter")]
+use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use std::marker::PhantomData;
 
 use alloc::sync::Arc;
 
+#[cfg(feature = "thread_local_counter")]
+use crate::epoch_counters::GlobalEpochCounterPool;
 use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
 
+/// A Rcu based on an atomic pointer to an [`Arc`] and a [`EpochCounterPool`]
+///
 pub struct Arcu<T, P> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw
     // - Arcu "owns" one strong reference count
     active_value: AtomicPtr<T>,
     epoch_counter_pool: P,
+    phantom: PhantomData<Arc<T>>,
 }
 
-#[cfg(feature = "thread_local_counters")]
-impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
+#[cfg(feature = "thread_local_counter")]
+impl<T: core::fmt::Display> core::fmt::Display for Arcu<T, GlobalEpochCounterPool> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let data = self.read();
         core::fmt::Display::fmt(&data.deref(), f)
@@ -26,24 +36,14 @@ impl<T: core::fmt::Display> core::fmt::Display for Arcu<T> {
 
 impl<T: core::fmt::Debug, P> core::fmt::Debug for Arcu<T, P> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        #[cfg(feature = "thread_local_counters")]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &self.read().deref())
-                .field("epoch_counter_pool", &"Opaque")
-                .finish();
-        }
-        #[cfg(not(feature = "thread_local_counters"))]
-        {
-            f.debug_struct("Rcu")
-                .field("active_value", &"Opaque")
-                .field("epoch_counter_pool", &"Opaque")
-                .finish()
-        }
+        f.debug_struct("Rcu")
+            .field("active_value", &"Opaque")
+            .field("epoch_counter_pool", &"Opaque")
+            .finish()
     }
 }
 
-/// ##Safety
+/// ## Safety
 /// - When mixing safe and unsafe functions care needs to be taken that write operations see all Epochs used by concurrent read operations
 /// - The safe read operations assume that the writer will observe `epoch_counters::THREAD_EPOCH_COUNTER`, see `epoch_counters::with_thread_local_epoch_counter`.
 /// - The safe writers assume that the readers will use one of the epoch counters in `epoch_counters::GLOBAL_EPOCH_COUNTERS`, see `epoch_counters::register_epoch_counter`.
@@ -56,6 +56,7 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
         Arcu {
             active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
             epoch_counter_pool,
+            phantom: PhantomData,
         }
     }
 

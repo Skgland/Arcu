@@ -1,7 +1,9 @@
-use core::{fmt::Debug, ops::Deref, ptr::NonNull};
+//! This module contains the [`RcuRef`] type which is a smart pointer to the content of an [`super::Rcu`]
 
 use alloc::sync::Arc;
+use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 
+/// A smard pointer for a reference to the content of an [`super::Rcu`]
 pub struct RcuRef<T, M>
 where
     T: ?Sized,
@@ -22,6 +24,7 @@ impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
 }
 
 impl<T: ?Sized> RcuRef<T, T> {
+    /// Create a new `RcuRef` from an `Arc`
     pub fn new(arc: Arc<T>) -> Self {
         Self {
             data: arc.as_ref().into(),
@@ -33,6 +36,7 @@ impl<T: ?Sized> RcuRef<T, T> {
 // use associated functions rather than methods so that we don't overlap
 // with functions of the Deref Target type
 impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
+    /// apply the mapping function to the reference in this RcuRef
     pub fn map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> &'a N>(
         reference: Self,
         f: F,
@@ -44,6 +48,7 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
         }
     }
 
+    /// try to apply the faillable mapping function to the reference in this RcuRef
     pub fn try_map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> Option<&'a N>>(
         reference: Self,
         f: F,
@@ -56,14 +61,24 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
         })
     }
 
+    /// Check whether the two RcuRefs reference values in the same epoch
     pub fn same_epoch<M2>(this: &Self, other: &RcuRef<T, M2>) -> bool {
         Arc::ptr_eq(&this.arc, &other.arc)
     }
 
+    /// Compares the RcuRefs references via [`core::ptr::eq`]
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        this.data == other.data
+        core::ptr::eq(this.data.as_ptr(), other.data.as_ptr())
     }
 
+    /// Compares the RcuRefs references via [`core::ptr::addr_eq`]
+    pub fn ptr_addr_eq(this: &Self, other: &Self) -> bool {
+        std::ptr::addr_eq(this.data.as_ptr(), other.data.as_ptr())
+    }
+
+    /// Clones the RcuRef
+    ///
+    /// Not implementing clone to not shadow the inner types clone impl
     #[allow(clippy::should_implement_trait)]
     pub fn clone(this: &Self) -> Self {
         Self {
@@ -72,6 +87,10 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
         }
     }
 
+    /// Get a reference to root of the RcuRef
+    ///
+    /// i.e. the value that was stored in the Rcu
+    /// before applying any mappings
     pub fn get_root(this: &Self) -> &T {
         &this.arc
     }

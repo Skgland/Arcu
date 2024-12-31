@@ -1,16 +1,16 @@
-use std::{
-    fmt::Debug,
-    ops::Deref,
-    sync::{Arc, RwLock},
-};
+use alloc::sync::Arc;
+use core::ops::Deref;
+use std::sync::RwLock;
 
 use arcu::{epoch_counters::EpochCounter, Rcu};
 
 extern crate alloc;
 
-struct Loud<T: Debug>(T);
+#[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
+struct Loud<T: core::fmt::Debug>(T);
 
-impl<T: Debug> Drop for Loud<T> {
+#[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
+impl<T: core::fmt::Debug> Drop for Loud<T> {
     fn drop(&mut self) {
         println!("Dropping: {:?}", self.0);
     }

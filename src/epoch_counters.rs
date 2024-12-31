@@ -1,9 +1,11 @@
+//! This module contains [`EpochCounter`], [`EpochCounterPool`] and related functionality.
+
 use alloc::sync::{Arc, Weak};
 use core::sync::atomic::{AtomicU8, Ordering};
 
 // the epoch counters of all threads that have ever accessed an Rcu
 // threads that have finished will have a dangling Weak reference and can be cleaned up
-// having this be shared between all Rcu's is a tradeof:
+// having this be shared between all Rcu's is a tradeoff:
 // - writes will be slower as more epoch counters need to be waited for
 // - reads should be faster as a thread only needs to register itself once on the first read
 #[cfg(feature = "global_counters")]
@@ -57,35 +59,69 @@ pub(crate) fn with_thread_local_epoch_counter<T>(fun: impl FnOnce(&EpochCounter)
     })
 }
 
+/// An epoch counter for Arcu
+///
+/// This is used to prevent deallocating
+/// the old content or an Arcu while a reader is reading
+///
+/// An even counter values means the EpochCounter is inactive i.e outside the critical section.
+/// An odd counter value means the EpochCounter is active i.e. in the critical section.
 #[repr(transparent)]
 pub struct EpochCounter(core::sync::atomic::AtomicU8);
 
 impl EpochCounter {
+    /// Create a new EpochCounter
     #[inline]
     pub const fn new() -> Self {
         Self(AtomicU8::new(0))
     }
 
+    /// Increment the epoch counter to enter the read-critical-section
+    ///
+    /// # Panics
+    /// - when the Epoch counter odd i.e. is already active/in the read critical section
     #[inline]
     pub(crate) fn enter_rcs(&self) {
         let old = self.0.fetch_add(1, Ordering::Acquire);
         assert!(old % 2 == 0, "Old Epoch counter value should be even!");
     }
 
+    /// Increment the epoch counter to leave the read-critical-section
+    ///
+    /// # Panics
+    /// - when the Epoch counter even i.e. is inactive/outside the read critical section
     #[inline]
     pub(crate) fn leave_rcs(&self) {
         let old = self.0.fetch_add(1, Ordering::Release);
         assert!(old % 2 != 0, "Old Epoch counter value should be odd!");
     }
 
+    /// Get the current epoch counter value
     pub(crate) fn get_epoch(&self) -> u8 {
         self.0.load(Ordering::Acquire)
     }
 }
 
+impl Default for EpochCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// ## Safety
 /// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be even or to have changed
+///
+/// The first one is necessary to not get stuck on inactive EpochCounters
+/// The second one is necessary to not get stuck when we race to only witness the EpochCounter in different visits to the read-critical-section.
+/// It is sufficient to witness a change rather than inactivity as the only way for the epoch counter to change is
+/// - to go from inactive to active or
+/// - to go from active to inactive
 pub unsafe trait EpochCounterPool {
+    /// Wait for each epoch counter of the pool to be inactive at least once
+    ///
+    /// We know that an epoch counter has been inactive at least once when have witnessed it to
+    /// - be inactive
+    /// - have changed
     fn wait_for_epochs(&self);
 }
 

@@ -1,3 +1,7 @@
+//! This module contains the RwLock and Arc based Rcu
+//!
+//! This is primarily intended to sanity check the atomic based one in [`super::atomic`]
+
 extern crate alloc;
 
 use std::{marker::PhantomData, sync::RwLock};
@@ -8,11 +12,13 @@ use crate::epoch_counters::{EpochCounter, EpochCounterPool};
 
 use super::Rcu;
 
+/// An Rcu based on an RwLock containing an Arc.
+///
+/// You probably want the Atomics basec one [`super::atomic::Arcu`].
+///
+/// This Rcu uses a RwLocks for synchronization instead of the EpochCounterPool.
+/// The EpochCounterPool is kept to keep the API compatible with the atomics based one.
 pub struct Arcu<T, P> {
-    // Safety invariant
-    // - the pointer has been created with Arc::into_raw
-    // - Arcu "owns" one strong reference count
-    // active_value: AtomicPtr<T>,
     active_value: RwLock<Arc<T>>,
     epoch_counter_pool: PhantomData<P>,
 }
@@ -52,8 +58,6 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
         self.active_value.read().unwrap().clone()
     }
 
-    /// ## Safety
-    /// - this impl is actually safe
     #[inline]
     fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         std::mem::replace(&mut self.active_value.write().unwrap(), new_value.into())

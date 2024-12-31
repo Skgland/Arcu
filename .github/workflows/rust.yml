@@ -26,11 +26,13 @@ jobs:
       run: cargo fmt -- --check
     - name: Check Clippy
       run: cargo clippy
+    - name: Check semver
+      uses: obi1kenobi/cargo-semver-checks-action@v2
 
   build:
     strategy:
       matrix:
-        channel: ["stable", "beta", "1.65.0"]
+        channel: ["stable", "beta", "1.76.0"]
         include:
           - { channel: "nightly", components: "miri"}
     needs: [lint]
