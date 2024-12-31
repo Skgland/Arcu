@@ -35,6 +35,8 @@ pub mod rwlock;
 
 pub mod rcu_ref;
 
+mod doc_tests;
+
 /// An abstract Rcu to abstract over the atomic based [`atomic::Arcu`] and the RwLock based [`rwlock::Arcu`]
 pub trait Rcu {
     /// The type contained in this Rcu
