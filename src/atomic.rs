@@ -5,6 +5,7 @@ extern crate alloc;
 #[cfg(feature = "thread_local_counter")]
 use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use std::marker::PhantomData;
 
 use alloc::sync::Arc;
 
@@ -22,6 +23,7 @@ pub struct Arcu<T, P> {
     // - Arcu "owns" one strong reference count
     active_value: AtomicPtr<T>,
     epoch_counter_pool: P,
+    phantom: PhantomData<Arc<T>>
 }
 
 #[cfg(feature = "thread_local_counter")]
@@ -54,6 +56,7 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
         Arcu {
             active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
             epoch_counter_pool,
+            phantom: PhantomData,
         }
     }
 
