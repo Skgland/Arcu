@@ -23,7 +23,7 @@ pub struct Arcu<T, P> {
     // - Arcu "owns" one strong reference count
     active_value: AtomicPtr<T>,
     epoch_counter_pool: P,
-    phantom: PhantomData<Arc<T>>
+    phantom: PhantomData<Arc<T>>,
 }
 
 #[cfg(feature = "thread_local_counter")]
