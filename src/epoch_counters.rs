@@ -1,11 +1,11 @@
-//! This module contais [`EpochCounter`], [`EpochCounterPool`] and related functionality.
+//! This module contains [`EpochCounter`], [`EpochCounterPool`] and related functionality.
 
 use alloc::sync::{Arc, Weak};
 use core::sync::atomic::{AtomicU8, Ordering};
 
 // the epoch counters of all threads that have ever accessed an Rcu
 // threads that have finished will have a dangling Weak reference and can be cleaned up
-// having this be shared between all Rcu's is a tradeof:
+// having this be shared between all Rcu's is a tradeoff:
 // - writes will be slower as more epoch counters need to be waited for
 // - reads should be faster as a thread only needs to register itself once on the first read
 #[cfg(feature = "global_counters")]
@@ -112,8 +112,8 @@ impl Default for EpochCounter {
 /// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be even or to have changed
 ///
 /// The first one is necessary to not get stuck on inactive EpochCounters
-/// The second one is necessay to not get stuck when we race to only witness the EpochCounter in different vistis to the read-critical-section.
-/// It is sufficent to witness a change rather than inactivity as the only way for the epoch counter to change is
+/// The second one is necessary to not get stuck when we race to only witness the EpochCounter in different visits to the read-critical-section.
+/// It is sufficient to witness a change rather than inactivity as the only way for the epoch counter to change is
 /// - to go from inactive to active or
 /// - to go from active to inactive
 pub unsafe trait EpochCounterPool {
