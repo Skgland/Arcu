@@ -43,7 +43,7 @@ impl<T: core::fmt::Debug, P> core::fmt::Debug for Arcu<T, P> {
     }
 }
 
-/// ##Safety
+/// ## Safety
 /// - When mixing safe and unsafe functions care needs to be taken that write operations see all Epochs used by concurrent read operations
 /// - The safe read operations assume that the writer will observe `epoch_counters::THREAD_EPOCH_COUNTER`, see `epoch_counters::with_thread_local_epoch_counter`.
 /// - The safe writers assume that the readers will use one of the epoch counters in `epoch_counters::GLOBAL_EPOCH_COUNTERS`, see `epoch_counters::register_epoch_counter`.
