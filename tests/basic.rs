@@ -2,7 +2,10 @@ use alloc::sync::Arc;
 use core::ops::Deref;
 use std::sync::RwLock;
 
-use arcu::{epoch_counters::EpochCounter, Rcu};
+use arcu::{CreateRcu, RawWeakRcu, epoch_counters::EpochCounter};
+
+#[cfg(feature = "thread_local_counter")]
+use arcu::{ThreadLocalRcuRead, ThreadLocalRcuWeakUpdate};
 
 extern crate alloc;
 
@@ -21,7 +24,7 @@ impl<T: core::fmt::Debug> Drop for Loud<T> {
 fn std_replace() {
     use arcu::epoch_counters::GlobalEpochCounterPool;
 
-    let rcu = arcu::atomic::Arcu::new(Loud(11), GlobalEpochCounterPool);
+    let rcu = arcu::weak_atomic::WeakAtomicArcu::new(Loud(11), GlobalEpochCounterPool);
     assert_eq!(rcu.read().0, 11);
     rcu.replace(Loud(55));
     assert_eq!(rcu.read().0, 55);
@@ -29,34 +32,42 @@ fn std_replace() {
 
 #[cfg(all(feature = "global_counters", feature = "thread_local_counter"))]
 #[test]
-fn std_update() {
+fn std_weak_try_update() {
     use arcu::epoch_counters::GlobalEpochCounterPool;
 
-    let rcu = arcu::atomic::Arcu::new(Loud((0, 0)), GlobalEpochCounterPool);
+    let rcu = arcu::weak_atomic::WeakAtomicArcu::new(Loud((0, 0)), GlobalEpochCounterPool);
     let rcu_ref = &rcu;
     assert_eq!(rcu.read().0, (0, 0));
 
     std::thread::scope(|scope| {
         for idx in 0..100 {
-            scope
-                .spawn(move || rcu_ref.try_update(|old| Some(Arc::new(Loud((idx, old.0 .1 + 1))))));
+            scope.spawn(move || {
+                rcu_ref.weak_try_update(|old| Ok::<_, ()>(Arc::new(Loud((idx, old.0.1 + 1)))))
+            });
         }
     });
 
-    assert_eq!(rcu.read().0 .1, 100);
+    assert_eq!(rcu.read().0.1, 100);
 }
 
 #[test]
-fn raw_replace_atomic() {
-    raw_replace::<arcu::atomic::Arcu<_, _>>()
+fn raw_replace_weak_atomic() {
+    raw_replace::<arcu::weak_atomic::WeakAtomicArcu<_, _>>()
+}
+
+#[test]
+fn raw_replace_strong_atomic() {
+    raw_replace::<arcu::strong_atomic::StrongAtomicArcu<_, _>>()
 }
 
 #[test]
 fn raw_replace_rwlock() {
-    raw_replace::<arcu::rwlock::Arcu<_, _>>()
+    raw_replace::<arcu::rwlock::RwLockArcu<_, _>>()
 }
 
-fn raw_replace<Arcu: Rcu<Item = i32, Pool = [Arc<EpochCounter>; 100]> + Send + Sync>() {
+fn raw_replace<
+    Arcu: CreateRcu + RawWeakRcu<Item = i32, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
+>() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_| Arc::new(EpochCounter::new()));
 
     let rcu = Arcu::new(201, epoch_counters.clone());
@@ -81,16 +92,23 @@ fn raw_replace<Arcu: Rcu<Item = i32, Pool = [Arc<EpochCounter>; 100]> + Send + S
 }
 
 #[test]
-fn raw_update1_atomic() {
-    raw_update1::<arcu::atomic::Arcu<_, _>>()
+fn raw_update1_weak_atomic() {
+    raw_update1::<arcu::weak_atomic::WeakAtomicArcu<_, _>>()
+}
+
+#[test]
+fn raw_update1_strong_atomic() {
+    raw_update1::<arcu::strong_atomic::StrongAtomicArcu<_, _>>()
 }
 
 #[test]
 fn raw_update1_rwlock() {
-    raw_update1::<arcu::rwlock::Arcu<_, _>>()
+    raw_update1::<arcu::rwlock::RwLockArcu<_, _>>()
 }
 
-fn raw_update1<Arcu: Rcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> + Send + Sync>() {
+fn raw_update1<
+    Arcu: CreateRcu + RawWeakRcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
+>() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_| Arc::new(EpochCounter::new()));
     let mut idx = 0;
     let epoch_counters_plus: [_; 100] = epoch_counters.clone().map(|counter| {
@@ -112,20 +130,24 @@ fn raw_update1<Arcu: Rcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> 
         for (epoch_counter, arc) in epoch_counters_ref {
             scope.spawn(|| {
                 let to_drop = unsafe {
-                    rcu.raw_try_update(
+                    rcu.raw_weak_try_update(
                         |old| {
                             let old = *old.read().unwrap();
                             println!("Old: {old}");
                             *arc.write().unwrap() = old + 1;
-                            Some(arc.clone())
+                            if true {
+                                Ok(arc.clone())
+                            } else {
+                                #[allow(unreachable_code)]
+                                Err(unreachable!())
+                            }
                         },
                         epoch_counter.deref(),
                     )
                 };
-                if let Some(to_drop) = to_drop {
-                    let to_drop = *to_drop.read().unwrap();
-                    println!("Dropping: {to_drop}");
-                }
+                let Ok(to_drop) = to_drop;
+                let to_drop = *to_drop.read().unwrap();
+                println!("Dropping: {to_drop}");
             });
         }
     });
@@ -138,16 +160,23 @@ fn raw_update1<Arcu: Rcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> 
 }
 
 #[test]
-fn raw_update2_atomic() {
-    raw_update2::<arcu::atomic::Arcu<_, _>>()
+fn raw_update2_weak_atomic() {
+    raw_update2::<arcu::weak_atomic::WeakAtomicArcu<_, _>>()
+}
+
+#[test]
+fn raw_update2_strong_atomic() {
+    raw_update2::<arcu::strong_atomic::StrongAtomicArcu<_, _>>()
 }
 
 #[test]
 fn raw_update2_rwlock() {
-    raw_update2::<arcu::rwlock::Arcu<_, _>>()
+    raw_update2::<arcu::rwlock::RwLockArcu<_, _>>()
 }
 
-fn raw_update2<Arcu: Rcu<Item = usize, Pool = [Arc<EpochCounter>; 100]> + Send + Sync>() {
+fn raw_update2<
+    Arcu: CreateRcu + RawWeakRcu<Item = usize, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
+>() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_idx| Arc::new(EpochCounter::new()));
     let rcu = Arcu::new(Arc::new(0), epoch_counters.clone());
 
@@ -157,15 +186,15 @@ fn raw_update2<Arcu: Rcu<Item = usize, Pool = [Arc<EpochCounter>; 100]> + Send +
         for epoch_counter in epoch_counters_ref {
             scope.spawn(|| {
                 let to_drop = unsafe {
-                    rcu.raw_try_update(
+                    rcu.raw_weak_try_update(
                         |old: &usize| {
                             println!("Old: {old}");
-                            Some(Arc::new(old + 1))
+                            Ok::<_, ()>(Arc::new(old + 1))
                         },
                         epoch_counter.deref(),
                     )
                 };
-                if let Some(to_drop) = to_drop {
+                if let Ok(to_drop) = to_drop {
                     println!("Dropping: {to_drop}");
                 }
             });

@@ -12,16 +12,6 @@ use core::sync::atomic::{AtomicU8, Ordering};
 static GLOBAL_EPOCH_COUNTERS: std::sync::RwLock<Vec<alloc::sync::Weak<EpochCounter>>> =
     std::sync::RwLock::new(Vec::new());
 
-#[cfg(feature = "global_counters")]
-pub fn register_epoch_counter(epoch_counter: alloc::sync::Weak<EpochCounter>) {
-    GLOBAL_EPOCH_COUNTERS.write().unwrap().push(epoch_counter)
-}
-
-#[cfg(feature = "global_counters")]
-pub fn global_counters() -> Vec<::alloc::sync::Weak<EpochCounter>> {
-    GLOBAL_EPOCH_COUNTERS.read().unwrap().clone()
-}
-
 #[cfg(feature = "thread_local_counter")]
 thread_local! {
     // odd value means the current thread is about to access the active_epoch of an Rcu
@@ -30,33 +20,60 @@ thread_local! {
     static THREAD_EPOCH_COUNTER: std::cell::OnceCell<std::sync::Arc<EpochCounter>> = const { std::cell::OnceCell::new() };
 }
 
+/// A global pool of epoch counters
 #[cfg(feature = "global_counters")]
 pub struct GlobalEpochCounterPool;
 
+// safety:
+//   - GLOBAL_EPOCH_COUNTERS contains all current epoch counter of this epoch counter pool
+//   - delegate wait obligation fulfilment to other wait_for_epochs impl
 #[cfg(feature = "global_counters")]
 unsafe impl EpochCounterPool for GlobalEpochCounterPool {
     fn wait_for_epochs(&self) {
-        global_counters.wait_for_epochs()
+        GLOBAL_EPOCH_COUNTERS
+            .read()
+            .unwrap()
+            .as_slice()
+            .wait_for_epochs()
     }
 }
 
-/// Calls the provided function with the thread local epoch counter
-///
-/// Per Thread: On first use registers the epoch counter
-#[cfg(feature = "thread_local_counter")]
-pub(crate) fn with_thread_local_epoch_counter<T>(fun: impl FnOnce(&EpochCounter) -> T) -> T {
-    THREAD_EPOCH_COUNTER.with(|epoch_counter| {
-        let epoch_counter = epoch_counter.get_or_init(|| {
-            let epoch_counter = Arc::new(EpochCounter::new());
+#[cfg(feature = "global_counters")]
+impl GlobalEpochCounterPool {
+    /// Remove dead epoch counter from the pool
+    pub fn cleanup_expired_counters(&self) {
+        GLOBAL_EPOCH_COUNTERS
+            .write()
+            .unwrap()
+            .retain(|item| item.strong_count() > 0)
+    }
 
-            // register the current threads epoch counter on init
-            register_epoch_counter(Arc::downgrade(&epoch_counter));
+    /// Register an EpochCounter with this epoch counter pool
+    pub fn register_epoch_counter(&self, epoch_counter: alloc::sync::Weak<EpochCounter>) {
+        GLOBAL_EPOCH_COUNTERS.write().unwrap().push(epoch_counter)
+    }
 
-            epoch_counter
-        });
+    /// Calls the provided function with the thread local epoch counter
+    ///
+    /// Per Thread: On first use registers the epoch counter
+    #[cfg(feature = "thread_local_counter")]
+    pub(crate) fn with_thread_local_epoch_counter<T>(
+        &self,
+        fun: impl FnOnce(&EpochCounter) -> T,
+    ) -> T {
+        THREAD_EPOCH_COUNTER.with(|epoch_counter| {
+            let epoch_counter = epoch_counter.get_or_init(|| {
+                let epoch_counter = Arc::new(EpochCounter::new());
 
-        fun(&epoch_counter)
-    })
+                // register the current threads epoch counter on init
+                self.register_epoch_counter(Arc::downgrade(&epoch_counter));
+
+                epoch_counter
+            });
+
+            fun(epoch_counter)
+        })
+    }
 }
 
 /// An epoch counter for Arcu
@@ -69,6 +86,18 @@ pub(crate) fn with_thread_local_epoch_counter<T>(fun: impl FnOnce(&EpochCounter)
 #[repr(transparent)]
 pub struct EpochCounter(core::sync::atomic::AtomicU8);
 
+/// Returned by `EpochCounter::enter_rcs``
+/// on drop causes the EpochCounter to leave the rcs and return to an inactive state.
+// type invariant: the epoch counter is in an active state
+pub struct RcsGuard<'ec>(&'ec EpochCounter);
+
+impl Drop for RcsGuard<'_> {
+    fn drop(&mut self) {
+        // safety: type invariant ensures rcs is in an active state
+        unsafe { self.0.leave_rcs() };
+    }
+}
+
 impl EpochCounter {
     /// Create a new EpochCounter
     #[inline]
@@ -77,23 +106,36 @@ impl EpochCounter {
     }
 
     /// Increment the epoch counter to enter the read-critical-section
+    /// The epoch counter will be in an active state on return.
     ///
-    /// # Panics
-    /// - when the Epoch counter odd i.e. is already active/in the read critical section
+    /// # Safety
+    /// - the epoch counter must be inactive state.
+    /// - the epoch counter must not be used concurrently
+    ///   - this potentially includes calling functions on ThreadLocalRcuRead and ThreadLocalRcuWeakUpdate
     #[inline]
-    pub(crate) fn enter_rcs(&self) {
+    pub unsafe fn enter_rcs(&self) -> RcsGuard<'_> {
         let old = self.0.fetch_add(1, Ordering::Acquire);
-        assert!(old % 2 == 0, "Old Epoch counter value should be even!");
+        debug_assert!(
+            old.is_multiple_of(2),
+            "Old Epoch counter value should be even!"
+        );
+        RcsGuard(self)
     }
 
     /// Increment the epoch counter to leave the read-critical-section
+    /// The epoch counter will be in an inactive state on return.
     ///
-    /// # Panics
-    /// - when the Epoch counter even i.e. is inactive/outside the read critical section
+    /// # Safety
+    ///
+    /// - the epoch counter must be in an active state.
+    /// - the epoch counter must not be used concurrently
     #[inline]
-    pub(crate) fn leave_rcs(&self) {
+    unsafe fn leave_rcs(&self) {
         let old = self.0.fetch_add(1, Ordering::Release);
-        assert!(old % 2 != 0, "Old Epoch counter value should be odd!");
+        debug_assert!(
+            !old.is_multiple_of(2),
+            "Old Epoch counter value should be odd!"
+        );
     }
 
     /// Get the current epoch counter value
@@ -109,7 +151,7 @@ impl Default for EpochCounter {
 }
 
 /// ## Safety
-/// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be even or to have changed
+/// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be inactive (even) or to have changed
 ///
 /// The first one is necessary to not get stuck on inactive EpochCounters
 /// The second one is necessary to not get stuck when we race to only witness the EpochCounter in different visits to the read-critical-section.
@@ -125,16 +167,14 @@ pub unsafe trait EpochCounterPool {
     fn wait_for_epochs(&self);
 }
 
-// Safety:
-// `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
-unsafe impl<F: Fn() -> Vec<Weak<EpochCounter>>> EpochCounterPool for F {
+// Safety: the implementation ensures that `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
+unsafe impl EpochCounterPool for &[Weak<EpochCounter>] {
     fn wait_for_epochs(&self) {
         // Get the current state of the epoch counters,
         // we can only drop the old value once we have observed all to be even or to have changed
-        let epochs = self();
 
-        let mut epochs = epochs
-            .into_iter()
+        let mut epochs = self
+            .iter()
             .flat_map(|elem| {
                 let arc = elem.upgrade()?;
                 let init_val = arc.get_epoch();
@@ -142,8 +182,9 @@ unsafe impl<F: Fn() -> Vec<Weak<EpochCounter>>> EpochCounterPool for F {
                     // already even can be ignored
                     return None;
                 }
-                // odd initial value thread is in the read critical section
-                // we need to wait for the value to change before we can drop the arc
+                // odd initial value thread is currently in the read critical section
+                // and we need to wait for the value to change before we can drop the arc
+                // importantly we don't need to wait for it be even a different odd value also sufficient
                 Some((init_val, elem))
             })
             .collect::<Vec<_>>();
@@ -157,7 +198,7 @@ unsafe impl<F: Fn() -> Vec<Weak<EpochCounter>>> EpochCounterPool for F {
                 // the epoch counter has not changed so the thread is still in the same instance of the critical section
                 // any different value is ok as
                 // - even values indicate the thread is outside of the critical section
-                // - a different odd value indicates the thread has left the critical section and can subsequently only read the new active_value
+                // - a different odd value indicates the thread has at some point left the critical section and can subsequently only read the new active_value
                 arc.get_epoch() == elem.0
             })
         }
@@ -168,6 +209,9 @@ unsafe impl<F: Fn() -> Vec<Weak<EpochCounter>>> EpochCounterPool for F {
 // `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
 unsafe impl<const N: usize> EpochCounterPool for [Arc<EpochCounter>; N] {
     fn wait_for_epochs(&self) {
-        (|| self.iter().map(Arc::downgrade).collect::<Vec<_>>()).wait_for_epochs()
+        self.each_ref()
+            .map(Arc::downgrade)
+            .as_slice()
+            .wait_for_epochs();
     }
 }

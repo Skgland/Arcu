@@ -1,7 +1,11 @@
 //! This module contains the [`RcuRef`] type which is a smart pointer to the content of an [`super::Rcu`]
 
+// FIXME use ArcRef/MappedArc once stable https://github.com/rust-lang/libs-team/issues/700
+
 use alloc::sync::Arc;
 use core::{fmt::Debug, ops::Deref, ptr::NonNull};
+
+use crate::never;
 
 /// A smard pointer for a reference to the content of an [`super::Rcu`]
 pub struct RcuRef<T, M>
@@ -41,23 +45,21 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
         reference: Self,
         f: F,
     ) -> RcuRef<T, N> {
-        RcuRef {
-            arc: reference.arc,
-            // Safety: See deref
-            data: f(unsafe { reference.data.as_ref() }).into(),
+        match RcuRef::try_map(reference, |data| Ok::<_, never::Never>(f(data))) {
+            Ok(result) => result,
         }
     }
 
-    /// try to apply the faillable mapping function to the reference in this RcuRef
-    pub fn try_map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> Option<&'a N>>(
+    /// try to apply the failable mapping function to the reference in this RcuRef
+    pub fn try_map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> Result<&'a N, Err>, Err>(
         reference: Self,
         f: F,
-    ) -> Option<RcuRef<T, N>> {
-        // Safety: See deref
-        let val = f(unsafe { reference.data.as_ref() })?;
-        Some(RcuRef {
-            arc: Arc::clone(&reference.arc),
-            data: val.into(),
+    ) -> Result<RcuRef<T, N>, Err> {
+        Ok(RcuRef {
+            arc: reference.arc,
+            // Safety:
+            // - data points into arc keeping the pointer valid
+            data: f(unsafe { reference.data.as_ref() })?.into(),
         })
     }
 

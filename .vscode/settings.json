@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
         "arcu",
-        "Arcu"
-    ]
+        "Arcu",
+        "rwlock"
+    ],
 }
