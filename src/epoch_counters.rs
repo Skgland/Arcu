@@ -83,7 +83,7 @@ impl EpochCounter {
     #[inline]
     pub(crate) fn enter_rcs(&self) {
         let old = self.0.fetch_add(1, Ordering::Acquire);
-        assert!(old % 2 == 0, "Old Epoch counter value should be even!");
+        assert!(old.is_multiple_of(2), "Old Epoch counter value should be even!");
     }
 
     /// Increment the epoch counter to leave the read-critical-section
@@ -93,7 +93,7 @@ impl EpochCounter {
     #[inline]
     pub(crate) fn leave_rcs(&self) {
         let old = self.0.fetch_add(1, Ordering::Release);
-        assert!(old % 2 != 0, "Old Epoch counter value should be odd!");
+        assert!(!old.is_multiple_of(2), "Old Epoch counter value should be odd!");
     }
 
     /// Get the current epoch counter value
