@@ -65,10 +65,10 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
 
     /// ## Safety
     /// - The epoch counter must not be used concurrently and must be in an inactive state
-    /// - The epoch counter must be made available to write operations
+    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
     #[inline]
     unsafe fn raw_read(&self, epoch_counter: &EpochCounter) -> Arc<T> {
-        // safety: caler obligation
+        // safety: caller obligation
         let rcs_guard = unsafe { epoch_counter.enter_rcs() };
 
         let arc_ptr = self.active_value.load(Ordering::SeqCst);
@@ -103,7 +103,7 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
         // Safety:
         // - the ptr was created in Arcu::new or Arcu::replace with Arc::into_raw
         // - we took the strong count of the Rcu
-        // - we witnessed all threads either with an even epoch count or with a new odd count,
+        // - `wait_for_epochs` witnessed all threads either with an even epoch count or with a new odd count,
         //   as such they must have left the critical section at some point
         unsafe { Arc::from_raw(arc_ptr) }
     }
@@ -113,8 +113,8 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
     /// Aborts when the update function returns None
     ///
     /// ## Safety
-    /// - `epoch_counter` must be valid for `raw_read`
-    /// - `get_epoch_counters` must be valid for `raw_replace`
+    /// - The epoch counter must not be used concurrently and must be in an inactive state
+    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
     unsafe fn raw_weak_try_update<Err>(
         &self,
         mut update: impl for<'a> FnMut(&'a T) -> Result<Arc<T>, Err>,
@@ -148,7 +148,7 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
                     // Safety:
                     // - the ptr was created in Arcu::new, Arcu::raw_replace, Arcu::raw_try_update with Arc::into_raw
                     // - we took the strong count of the Arcu
-                    // - we witnessed all threads either with an even epoch count or with a new odd count,
+                    // - `wait_for_epochs` witnessed all threads either with an even epoch count or with a new odd count,
                     //   as such they must have left the critical section at some point
                     return Ok(unsafe { Arc::from_raw(old) });
                 }

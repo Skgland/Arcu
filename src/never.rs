@@ -1,3 +1,6 @@
+//! Workaround ! being unstable
+//! only used internally to guide type inference
+
 pub(crate) type Never = <fn() -> ! as FnOutput>::Output;
 
 pub(crate) trait FnOutput {

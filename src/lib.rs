@@ -28,7 +28,7 @@ mod never;
 /// An abstract Rcu to abstract over the atomic based [`atomic::Arcu`] and the RwLock based [`rwlock::Arcu`]
 ///
 /// # Safety
-/// - update and try_update must ensure that updates are serialized
+/// - update and try_update must ensure that updates don't race i.e. are serialized
 pub unsafe trait Rcu: RawWeakRcu {
     /// Update the Rcu's contained value.
     /// Concurrent updates will be serialized
@@ -64,17 +64,15 @@ pub trait ThreadLocalRcuRead: RawWeakRcu<Pool = GlobalEpochCounterPool> {
     /// 3. atomically load the arc pointer
     /// 4. atomically increment the arc strong count
     /// 5. atomically increment the epoch counter (by one from odd back to even)
-    fn read(&self) -> rcu_ref::RcuRef<Self::Item, Self::Item> {
+    fn read(&self) -> Arc<Self::Item> {
         use crate::epoch_counters::GlobalEpochCounterPool;
 
-        let arc = GlobalEpochCounterPool.with_thread_local_epoch_counter(|epoch_counter| {
+        GlobalEpochCounterPool.with_thread_local_epoch_counter(|epoch_counter| {
             // Safety:
             // - callers of EpochCounter::enter_rcs must ensure this function isn't called while the epoch counter is active
-            // - the thread local epoch counter will be registered with the global epoch counter pool
+            // - the thread local epoch counter is registered with the global epoch counter pool which is used by this rcu
             unsafe { self.raw_read(epoch_counter) }
-        });
-
-        rcu_ref::RcuRef::<Self::Item, Self::Item>::new(arc)
+        })
     }
 }
 
@@ -112,7 +110,7 @@ pub trait ThreadLocalRcuWeakUpdate:
         GlobalEpochCounterPool.with_thread_local_epoch_counter(|epoch_counter| {
             // Safety:
             // - callers of EpochCounter::enter_rcs must ensure this function isn't called while the epoch counter is active
-            // - the thread local epoch counter will be registered with the global epoch counter pool
+            // - the thread local epoch counter is registered with the global epoch counter pool used by this rcu
             unsafe {
                 self.raw_weak_try_update(move |old| update(old).map(Into::into), epoch_counter)
             }
@@ -154,7 +152,8 @@ pub unsafe trait RawWeakRcu {
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
     ///
     /// ## Safety
-    /// - same requirements as raw_weak_try_update
+    /// - The epoch counter must not be used concurrently
+    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
     unsafe fn raw_weak_update(
         &self,
         mut update: impl for<'a> FnMut(&Self::Item) -> Arc<Self::Item>,
@@ -170,7 +169,7 @@ pub unsafe trait RawWeakRcu {
 
     /// Update the Rcu using the provided update function
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
-    /// Aborts when the update function returns None
+    /// Aborts when the update function returns Err(_)
     ///
     /// ## Safety
     /// - The epoch counter must not be used concurrently

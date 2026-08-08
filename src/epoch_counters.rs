@@ -25,8 +25,8 @@ thread_local! {
 pub struct GlobalEpochCounterPool;
 
 // safety:
-//   - get_registered_counters returns all relevant epoch counter
-//   - wait_for_epochs ensures we wait long enough
+//   - GLOBAL_EPOCH_COUNTERS contains all current epoch counter of this epoch counter pool
+//   - delegate wait obligation fulfilment to other wait_for_epochs impl
 #[cfg(feature = "global_counters")]
 unsafe impl EpochCounterPool for GlobalEpochCounterPool {
     fn wait_for_epochs(&self) {
@@ -147,7 +147,7 @@ impl Default for EpochCounter {
 }
 
 /// ## Safety
-/// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be even or to have changed
+/// `wait_for_epochs` must not return normally until all epoch counters have been witnessed to be inactive (even) or to have changed
 ///
 /// The first one is necessary to not get stuck on inactive EpochCounters
 /// The second one is necessary to not get stuck when we race to only witness the EpochCounter in different visits to the read-critical-section.
@@ -163,8 +163,7 @@ pub unsafe trait EpochCounterPool {
     fn wait_for_epochs(&self);
 }
 
-// Safety:
-// `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
+// Safety: the implementation ensures that `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
 unsafe impl EpochCounterPool for &[Weak<EpochCounter>] {
     fn wait_for_epochs(&self) {
         // Get the current state of the epoch counters,
@@ -195,7 +194,7 @@ unsafe impl EpochCounterPool for &[Weak<EpochCounter>] {
                 // the epoch counter has not changed so the thread is still in the same instance of the critical section
                 // any different value is ok as
                 // - even values indicate the thread is outside of the critical section
-                // - a different odd value indicates the thread has left the critical section and can subsequently only read the new active_value
+                // - a different odd value indicates the thread has at some point left the critical section and can subsequently only read the new active_value
                 arc.get_epoch() == elem.0
             })
         }

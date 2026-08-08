@@ -72,6 +72,9 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for RwLockArcu<T, P> {
     /// Update the Rcu using the provided update function
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
     /// Aborts when the update function returns None
+    ///
+    /// ## Safety:
+    /// - this impl is actually safe
     #[inline]
     unsafe fn raw_weak_try_update<Err>(
         &self,

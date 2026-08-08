@@ -59,8 +59,8 @@ impl<T, P: EpochCounterPool> CreateRcu for StrongAtomicArcu<T, P> {
 }
 
 // Safety:
-//       - try_update serialized updated by taking the write mutex lock
-//       - default update impl uses try_update
+// - try_update serialized updated by taking the write mutex lock
+// - default update impl uses try_update
 unsafe impl<T, P: EpochCounterPool> Rcu for StrongAtomicArcu<T, P> {
     fn try_update<Err>(
         &self,
@@ -73,7 +73,7 @@ unsafe impl<T, P: EpochCounterPool> Rcu for StrongAtomicArcu<T, P> {
         let old: Arc<T> = unsafe {
             // Safety:
             // - the ptr was created in Rcu::new or Rcu::replace with Arc::into_raw
-            // - the Rcu is responsible for of the arc's strong references
+            // - the Rcu is responsible for one of the arc's strong references
             // - the Rcu is alive as this function takes a reference to the Rcu
             // - we have the write lock so there won't be a concurrent decrement
             Arc::increment_strong_count(arc_ptr);
@@ -99,8 +99,8 @@ unsafe impl<T, P: EpochCounterPool> Rcu for StrongAtomicArcu<T, P> {
         debug_assert_eq!(old2, arc_ptr);
 
         // Safety:
-        //  - we got one strong count from swapping with new (in exchange for a )
-        //  - the arc is still kept alive by old so we won't invalidate readers
+        //  - we got one strong count from swapping with new (in exchange for a strong count of old aka. old2)
+        //  - the arc is still kept alive by old so this won't invalidate readers in the rcs
         unsafe { Arc::decrement_strong_count(old2) };
 
         drop(write_guard);
@@ -117,8 +117,8 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for StrongAtomicArcu<T, P> {
     type Pool = P;
 
     /// ## Safety
-    /// - The epoch counter must not be used concurrently
-    /// - The epoch counter must be made available to write operations
+    /// - The epoch counter must not be used concurrently and must be in an inactive state
+    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
     #[inline]
     unsafe fn raw_read(&self, epoch_counter: &EpochCounter) -> Arc<T> {
         // safety: caller obligation
@@ -155,8 +155,8 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for StrongAtomicArcu<T, P> {
     /// Aborts when the update function returns None
     ///
     /// ## Safety
-    /// - `epoch_counter` must be valid for `raw_read`
-    /// - `get_epoch_counters` must be valid for `raw_replace`
+    /// - The epoch counter must not be used concurrently and must be in an inactive state
+    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
     unsafe fn raw_weak_try_update<Err>(
         &self,
         update: impl for<'a> FnMut(&'a T) -> Result<Arc<T>, Err>,
