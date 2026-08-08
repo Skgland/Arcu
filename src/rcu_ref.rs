@@ -1,6 +1,5 @@
 //! This module contains the [`RcuRef`] type which is a smart pointer to the content of an [`super::Rcu`]
 
-
 // FIXME use ArcRef/MappedArc once stable https://github.com/rust-lang/libs-team/issues/700
 
 use alloc::sync::Arc;
@@ -46,9 +45,8 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
         reference: Self,
         f: F,
     ) -> RcuRef<T, N> {
-
         match RcuRef::try_map(reference, |data| Ok::<_, never::Never>(f(data))) {
-            Ok(result) => result
+            Ok(result) => result,
         }
     }
 

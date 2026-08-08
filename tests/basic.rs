@@ -5,7 +5,7 @@ use std::sync::RwLock;
 use arcu::{CreateRcu, RawWeakRcu, epoch_counters::EpochCounter};
 
 #[cfg(feature = "thread_local_counter")]
-use arcu::{ThreadLocalRcuWeakUpdate, ThreadLocalRcuRead};
+use arcu::{ThreadLocalRcuRead, ThreadLocalRcuWeakUpdate};
 
 extern crate alloc;
 

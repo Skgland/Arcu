@@ -30,7 +30,11 @@ pub struct GlobalEpochCounterPool;
 #[cfg(feature = "global_counters")]
 unsafe impl EpochCounterPool for GlobalEpochCounterPool {
     fn wait_for_epochs(&self) {
-         GLOBAL_EPOCH_COUNTERS.read().unwrap().as_slice().wait_for_epochs()
+        GLOBAL_EPOCH_COUNTERS
+            .read()
+            .unwrap()
+            .as_slice()
+            .wait_for_epochs()
     }
 }
 
@@ -205,6 +209,9 @@ unsafe impl EpochCounterPool for &[Weak<EpochCounter>] {
 // `wait_for_epochs` does not return normally until all epoch counters have been witnessed to be even or to have changed
 unsafe impl<const N: usize> EpochCounterPool for [Arc<EpochCounter>; N] {
     fn wait_for_epochs(&self) {
-        self.each_ref().map(Arc::downgrade).as_slice().wait_for_epochs();
+        self.each_ref()
+            .map(Arc::downgrade)
+            .as_slice()
+            .wait_for_epochs();
     }
 }

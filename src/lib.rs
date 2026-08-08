@@ -11,9 +11,9 @@ pub mod epoch_counters;
 use alloc::sync::Arc;
 use epoch_counters::EpochCounterPool;
 
+use crate::epoch_counters::EpochCounter;
 #[cfg(feature = "thread_local_counter")]
 use crate::epoch_counters::GlobalEpochCounterPool;
-use crate::epoch_counters::EpochCounter;
 
 pub mod rwlock;
 pub mod strong_atomic;
