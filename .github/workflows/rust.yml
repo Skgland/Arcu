@@ -47,11 +47,13 @@ jobs:
         run: echo "msrv=$(cargo metadata  --no-deps --format-version  1 | jq -r '.packages[] | select(.name = "arcu") | ."rust_version"')" >>  "$GITHUB_OUTPUT"
 
   build:
+    name: "build (${{ matrix.name || matrix.channel }})"
     strategy:
       matrix:
-        channel: ["stable", "beta", "${{ needs.read-msrv.outputs.msrv }}"]
+        channel: ["stable", "beta"]
         include:
           - { channel: "nightly", components: "miri"}
+          - { channel: "${{ needs.read-msrv.outputs.msrv }}", name: "msrv"}
     needs: [lint, read-msrv]
     runs-on: ubuntu-latest
     steps:
