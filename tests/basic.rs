@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use core::ops::Deref;
 use std::sync::RwLock;
 
-use arcu::{epoch_counters::EpochCounter, Rcu};
+use arcu::{Rcu, epoch_counters::EpochCounter};
 
 extern crate alloc;
 
@@ -38,12 +38,11 @@ fn std_update() {
 
     std::thread::scope(|scope| {
         for idx in 0..100 {
-            scope
-                .spawn(move || rcu_ref.try_update(|old| Some(Arc::new(Loud((idx, old.0 .1 + 1))))));
+            scope.spawn(move || rcu_ref.try_update(|old| Some(Arc::new(Loud((idx, old.0.1 + 1))))));
         }
     });
 
-    assert_eq!(rcu.read().0 .1, 100);
+    assert_eq!(rcu.read().0.1, 100);
 }
 
 #[test]

@@ -120,7 +120,8 @@ impl<T, P: EpochCounterPool> Rcu for Arcu<T, P> {
         epoch_counter: &EpochCounter,
     ) -> Option<Arc<T>> {
         loop {
-            let old = self.raw_read(epoch_counter);
+            // safety: per this functions safety precondition the caller has ensured that epoch_counter is valid for raw_read
+            let old = unsafe { self.raw_read(epoch_counter) };
 
             let new = Arc::into_raw(update(&old)?);
 
