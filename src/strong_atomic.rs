@@ -1,4 +1,4 @@
-//! Thi module contains the atomic and Arc based Rcu
+//! This module contains the atomic and Arc based Rcu
 
 extern crate alloc;
 
@@ -9,13 +9,11 @@ use std::{marker::PhantomData, sync::Mutex};
 
 use alloc::sync::Arc;
 
-use crate::Rcu;
-use crate::{
-    CreateRcu, RawWeakRcu,
-    epoch_counters::{EpochCounter, EpochCounterPool},
-};
 #[cfg(feature = "thread_local_counter")]
-use crate::{ThreadLocalRcuRead, epoch_counters::GlobalEpochCounterPool};
+use crate::epoch_counters::GlobalEpochCounterPool;
+
+use crate::epoch_counters::{EpochCounter, EpochCounterPool};
+use crate::{Rcu, RcuCore};
 
 /// A Rcu based on an atomic pointer to an [`Arc`] and a [`EpochCounterPool`]
 ///
@@ -43,18 +41,6 @@ impl<T: core::fmt::Debug, P> core::fmt::Debug for StrongAtomicArcu<T, P> {
             .field("active_value", &"Opaque")
             .field("epoch_counter_pool", &"Opaque")
             .finish()
-    }
-}
-
-impl<T, P: EpochCounterPool> CreateRcu for StrongAtomicArcu<T, P> {
-    #[inline]
-    fn new(initial: impl Into<Arc<T>>, epoch_counter_pool: P) -> Self {
-        StrongAtomicArcu {
-            active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
-            epoch_counter_pool,
-            write: Mutex::new(()),
-            phantom: PhantomData,
-        }
     }
 }
 
@@ -112,9 +98,19 @@ unsafe impl<T, P: EpochCounterPool> Rcu for StrongAtomicArcu<T, P> {
 }
 
 // safety: each call of `enter_rcs` is paired with a call to `leave_rcs`
-unsafe impl<T, P: EpochCounterPool> RawWeakRcu for StrongAtomicArcu<T, P> {
+unsafe impl<T, P: EpochCounterPool> RcuCore for StrongAtomicArcu<T, P> {
     type Item = T;
     type Pool = P;
+
+    #[inline]
+    fn new(initial: impl Into<Arc<T>>, epoch_counter_pool: P) -> Self {
+        StrongAtomicArcu {
+            active_value: AtomicPtr::new(Arc::into_raw(initial.into()).cast_mut()),
+            epoch_counter_pool,
+            write: Mutex::new(()),
+            phantom: PhantomData,
+        }
+    }
 
     /// ## Safety
     /// - The epoch counter must not be used concurrently and must be in an inactive state
@@ -148,21 +144,6 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for StrongAtomicArcu<T, P> {
     #[inline]
     fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
         self.update(move |_| new_value.into())
-    }
-
-    /// Update the Rcu using the provided update function
-    /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
-    /// Aborts when the update function returns None
-    ///
-    /// ## Safety
-    /// - The epoch counter must not be used concurrently and must be in an inactive state
-    /// - The epoch counter must belong to the EpochCounterPool of this Rcu
-    unsafe fn raw_weak_try_update<Err>(
-        &self,
-        update: impl for<'a> FnMut(&'a T) -> Result<Arc<T>, Err>,
-        _epoch_counter: &EpochCounter,
-    ) -> Result<Arc<T>, Err> {
-        self.try_update(update)
     }
 }
 

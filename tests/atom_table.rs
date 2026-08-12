@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use arcu::{
-    CreateRcu, Rcu, ThreadLocalRcuRead, ThreadLocalRcuWeakUpdate,
-    epoch_counters::GlobalEpochCounterPool, rwlock::RwLockArcu, strong_atomic::StrongAtomicArcu,
+    Rcu, epoch_counters::GlobalEpochCounterPool, rwlock::RwLockArcu,
+    strong_atomic::StrongAtomicArcu,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,9 +15,7 @@ struct AtomTable<Arcu> {
     table: Arcu,
 }
 
-impl<Arcu: Rcu<Item = Vec<&'static str>, Pool = GlobalEpochCounterPool> + ThreadLocalRcuRead>
-    AtomTable<Arcu>
-{
+impl<Arcu: Rcu<Item = Vec<&'static str>, Pool = GlobalEpochCounterPool>> AtomTable<Arcu> {
     fn build_with(&self, atom: &'static str) -> Atom {
         let table = self.table.read();
 
@@ -63,7 +61,7 @@ fn simulate_parallel_machine_rwlock() {
 }
 
 fn simulate_parallel_machine<
-    Arcu: CreateRcu<Item = Vec<&'static str>> + Rcu + ThreadLocalRcuWeakUpdate + Sync,
+    Arcu: Rcu<Item = Vec<&'static str>, Pool = GlobalEpochCounterPool> + Sync,
 >() {
     const EXAMPLES: &[&str] = &[".", "|", "halt", "module", "library", ":", ""];
 

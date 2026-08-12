@@ -1,4 +1,4 @@
-//! Thi module contains the atomic and Arc based Rcu
+//! This module contains the atomic and Arc based Rcu
 
 extern crate alloc;
 
@@ -10,15 +10,14 @@ use std::marker::PhantomData;
 use alloc::sync::Arc;
 
 use crate::{
-    CreateRcu, RawWeakRcu,
+    RcuCore, WeakRcu,
     epoch_counters::{EpochCounter, EpochCounterPool},
 };
 
 #[cfg(feature = "thread_local_counter")]
-use crate::{ThreadLocalRcuRead, epoch_counters::GlobalEpochCounterPool};
+use crate::epoch_counters::GlobalEpochCounterPool;
 
 /// A Rcu based on an atomic pointer to an [`Arc`] and a [`EpochCounterPool`]
-///
 pub struct WeakAtomicArcu<T, P> {
     // Safety invariant
     // - the pointer has been created with Arc::into_raw
@@ -45,7 +44,13 @@ impl<T: core::fmt::Debug, P> core::fmt::Debug for WeakAtomicArcu<T, P> {
     }
 }
 
-impl<T, P: EpochCounterPool> CreateRcu for WeakAtomicArcu<T, P> {
+// safety:
+//  - callers must ensure epoch counter is initially inactive
+//  - RcsGuard ensures epoch counters are returned to inactive state
+unsafe impl<T, P: EpochCounterPool> RcuCore for WeakAtomicArcu<T, P> {
+    type Item = T;
+    type Pool = P;
+
     #[inline]
     fn new(initial: impl Into<Arc<T>>, epoch_counter_pool: P) -> Self {
         WeakAtomicArcu {
@@ -54,14 +59,6 @@ impl<T, P: EpochCounterPool> CreateRcu for WeakAtomicArcu<T, P> {
             phantom: PhantomData,
         }
     }
-}
-
-// safety:
-//  - callers must ensure epoch counter is initially inactive
-//  - RcsGuard ensures epoch counters are returned to inactive state
-unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
-    type Item = T;
-    type Pool = P;
 
     /// ## Safety
     /// - The epoch counter must not be used concurrently and must be in an inactive state
@@ -107,7 +104,13 @@ unsafe impl<T, P: EpochCounterPool> RawWeakRcu for WeakAtomicArcu<T, P> {
         //   as such they must have left the critical section at some point
         unsafe { Arc::from_raw(arc_ptr) }
     }
+}
 
+// Safety: we don't leave epoch counter in an active state
+unsafe impl<T, P: EpochCounterPool> WeakRcu for WeakAtomicArcu<T, P>
+where
+    Self: RcuCore<Item = T, Pool = P>,
+{
     /// Update the Rcu using the provided update function
     /// Retries when the Rcu has been updated/replaced between reading the old value and writing the new value
     /// Aborts when the update function returns None

@@ -2,10 +2,10 @@ use alloc::sync::Arc;
 use core::ops::Deref;
 use std::sync::RwLock;
 
-use arcu::{CreateRcu, RawWeakRcu, epoch_counters::EpochCounter};
+use arcu::{WeakRcu, epoch_counters::EpochCounter};
 
 #[cfg(feature = "thread_local_counter")]
-use arcu::{ThreadLocalRcuRead, ThreadLocalRcuWeakUpdate};
+use arcu::RcuCore as _;
 
 extern crate alloc;
 
@@ -65,9 +65,7 @@ fn raw_replace_rwlock() {
     raw_replace::<arcu::rwlock::RwLockArcu<_, _>>()
 }
 
-fn raw_replace<
-    Arcu: CreateRcu + RawWeakRcu<Item = i32, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
->() {
+fn raw_replace<Arcu: WeakRcu<Item = i32, Pool = [Arc<EpochCounter>; 100]> + Send + Sync>() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_| Arc::new(EpochCounter::new()));
 
     let rcu = Arcu::new(201, epoch_counters.clone());
@@ -107,7 +105,7 @@ fn raw_update1_rwlock() {
 }
 
 fn raw_update1<
-    Arcu: CreateRcu + RawWeakRcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
+    Arcu: WeakRcu<Item = RwLock<usize>, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
 >() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_| Arc::new(EpochCounter::new()));
     let mut idx = 0;
@@ -174,9 +172,7 @@ fn raw_update2_rwlock() {
     raw_update2::<arcu::rwlock::RwLockArcu<_, _>>()
 }
 
-fn raw_update2<
-    Arcu: CreateRcu + RawWeakRcu<Item = usize, Pool = [Arc<EpochCounter>; 100]> + Send + Sync,
->() {
+fn raw_update2<Arcu: WeakRcu<Item = usize, Pool = [Arc<EpochCounter>; 100]> + Send + Sync>() {
     let epoch_counters: [_; 100] = std::array::from_fn(|_idx| Arc::new(EpochCounter::new()));
     let rcu = Arcu::new(Arc::new(0), epoch_counters.clone());
 

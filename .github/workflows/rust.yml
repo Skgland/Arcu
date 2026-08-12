@@ -71,6 +71,9 @@ jobs:
     - name: Build
       run: cargo build --verbose
 
+    - name: Check feature combinations
+      run: ./.github/workflows/feature_combinations.sh
+
     - name: Run tests
       run: cargo test --verbose
 
