@@ -8,6 +8,8 @@ extern crate alloc;
 
 pub mod epoch_counters;
 
+use std::ops::Deref;
+
 use alloc::sync::Arc;
 use epoch_counters::EpochCounterPool;
 
@@ -77,17 +79,34 @@ pub unsafe trait RcuCore {
     }
 }
 
+/// Defines the operation available on the Rcu::UpdateGuard returned by Rcu::update_lock
+pub trait UpdateGuard: Deref<Target = Self::Item> {
+    /// The guarded item type
+    type Item;
+
+    /// Replace the current value by the new value
+    fn replace(self, new: impl Into<Arc<Self::Item>>) -> Arc<Self::Item>;
+}
+
 /// An abstract Rcu to abstract over the atomic based [`atomic::Arcu`] and the RwLock based [`rwlock::Arcu`]
 ///
 /// # Safety
 /// - update and try_update must ensure that updates don't race i.e. are serialized
 pub unsafe trait Rcu: RcuCore {
+    /// The type returned by Rcu::update_lock
+    type UpdateGuard<'a>: UpdateGuard<Item = Self::Item>
+    where
+        Self: 'a;
+
+    /// Lock the Rcu to prevent it from being replaced concurrently.
+    fn update_lock(&self) -> Self::UpdateGuard<'_>;
+
     /// Update the Rcu's contained value.
     /// Concurrent updates will be serialized
     fn update(&self, update: impl FnOnce(&Self::Item) -> Arc<Self::Item>) -> Arc<Self::Item> {
-        match self.try_update(|item| Ok::<_, never::Never>(update(item))) {
-            Ok(result) => result,
-        }
+        let guard = self.update_lock();
+        let new = update(&guard);
+        guard.replace(new)
     }
 
     /// Try to update the Rcu's contained value.
@@ -96,7 +115,11 @@ pub unsafe trait Rcu: RcuCore {
     fn try_update<Err>(
         &self,
         update: impl FnOnce(&Self::Item) -> Result<Arc<Self::Item>, Err>,
-    ) -> Result<Arc<Self::Item>, Err>;
+    ) -> Result<Arc<Self::Item>, Err> {
+        let guard = self.update_lock();
+        let new = update(&guard)?;
+        Ok(guard.replace(new))
+    }
 }
 
 /// # Safety
