@@ -19,7 +19,7 @@ pub mod rwlock;
 pub mod strong_atomic;
 pub mod weak_atomic;
 
-pub mod rcu_ref;
+pub mod mapped_arc;
 
 mod doc_tests;
 

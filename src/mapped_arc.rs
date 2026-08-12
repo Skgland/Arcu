@@ -8,18 +8,16 @@ use core::{fmt::Debug, ops::Deref, ptr::NonNull};
 use crate::never;
 
 /// A smard pointer for a reference to the content of an [`super::Rcu`]
-pub struct RcuRef<T, M>
+pub struct MappedArc<T>
 where
     T: ?Sized,
-    M: ?Sized,
 {
     // we keep the arc to ensure its still alive, but we only access its data through data
-    #[allow(dead_code)]
-    arc: Arc<T>,
-    data: NonNull<M>,
+    _arc: Arc<dyn Send + Sync>,
+    data: NonNull<T>,
 }
 
-impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
+impl<T: ?Sized + Debug> Debug for MappedArc<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RcuRef")
             .field("data", &self.deref())
@@ -27,36 +25,66 @@ impl<T: ?Sized, M: ?Sized + Debug> Debug for RcuRef<T, M> {
     }
 }
 
-impl<T: ?Sized> RcuRef<T, T> {
+impl<T: ?Sized> MappedArc<T>
+where
+    Arc<T>: DynArc,
+{
     /// Create a new `RcuRef` from an `Arc`
     pub fn new(arc: Arc<T>) -> Self {
-        Self {
-            data: arc.as_ref().into(),
-            arc,
-        }
+        let data = arc.as_ref().into();
+        let arc: Arc<dyn Send + Sync + 'static> = arc.to_dyn_arc();
+        Self { _arc: arc, data }
+    }
+}
+
+mod seal {
+    use super::*;
+
+    pub(crate) trait Seal {}
+
+    impl<T: Send + Sync + 'static> Seal for Arc<T> {}
+    impl Seal for Arc<dyn Send + Sync + 'static> {}
+}
+
+/// A trait for abstracting over Arcs that are either Arc<dyn Send + Sync + 'static> or can be coearced to it
+#[allow(private_bounds)]
+pub trait DynArc: seal::Seal {
+    /// Convert an Arc to Arc<dyn Send + Sync + 'static>
+    fn to_dyn_arc(self) -> Arc<dyn Sync + Send + 'static>;
+}
+
+impl<T: Send + Sync + 'static> DynArc for Arc<T> {
+    fn to_dyn_arc(self) -> Arc<dyn Sync + Send + 'static> {
+        self
+    }
+}
+
+impl DynArc for Arc<dyn Send + Sync + 'static> {
+    fn to_dyn_arc(self) -> Arc<dyn Sync + Send + 'static> {
+        self
     }
 }
 
 // use associated functions rather than methods so that we don't overlap
 // with functions of the Deref Target type
-impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
+impl<T: ?Sized> MappedArc<T> {
     /// apply the mapping function to the reference in this RcuRef
-    pub fn map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> &'a N>(
+    pub fn map<N: ?Sized, F: for<'a> FnOnce(&'a T) -> &'a N>(
         reference: Self,
         f: F,
-    ) -> RcuRef<T, N> {
-        match RcuRef::try_map(reference, |data| Ok::<_, never::Never>(f(data))) {
+    ) -> MappedArc<N> {
+        match MappedArc::try_map(reference, |data| Ok::<&N, never::Never>(f(data))) {
             Ok(result) => result,
         }
     }
 
     /// try to apply the failable mapping function to the reference in this RcuRef
-    pub fn try_map<N: ?Sized, F: for<'a> FnOnce(&'a M) -> Result<&'a N, Err>, Err>(
+    pub fn try_map<N: ?Sized, F: for<'a> FnOnce(&'a T) -> Result<&'a N, Err>, Err>(
         reference: Self,
         f: F,
-    ) -> Result<RcuRef<T, N>, Err> {
-        Ok(RcuRef {
-            arc: reference.arc,
+    ) -> Result<MappedArc<N>, Err> {
+        Ok(MappedArc {
+            _arc: reference._arc,
             // Safety:
             // - data points into arc keeping the pointer valid
             data: f(unsafe { reference.data.as_ref() })?.into(),
@@ -64,8 +92,8 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
     }
 
     /// Check whether the two RcuRefs reference values in the same epoch
-    pub fn same_epoch<M2>(this: &Self, other: &RcuRef<T, M2>) -> bool {
-        Arc::ptr_eq(&this.arc, &other.arc)
+    pub fn same_epoch(this: &Self, other: &Self) -> bool {
+        Arc::ptr_eq(&this._arc, &other._arc)
     }
 
     /// Compares the RcuRefs references via [`core::ptr::eq`]
@@ -84,7 +112,7 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
     #[allow(clippy::should_implement_trait)]
     pub fn clone(this: &Self) -> Self {
         Self {
-            arc: Arc::clone(&this.arc),
+            _arc: Arc::clone(&this._arc),
             data: this.data,
         }
     }
@@ -93,12 +121,12 @@ impl<T: ?Sized, M: ?Sized> RcuRef<T, M> {
     ///
     /// i.e. the value that was stored in the Rcu
     /// before applying any mappings
-    pub fn get_root(this: &Self) -> &T {
-        &this.arc
+    pub fn get_root(this: &Self) -> &Arc<dyn Send + Sync + 'static> {
+        &this._arc
     }
 }
 
-impl<T: ?Sized, M: ?Sized> Deref for RcuRef<T, M> {
+impl<M: ?Sized> Deref for MappedArc<M> {
     type Target = M;
 
     fn deref(&self) -> &Self::Target {
