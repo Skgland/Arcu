@@ -4,12 +4,16 @@
 
 extern crate alloc;
 
-use std::{marker::PhantomData, sync::RwLock};
+use std::{
+    marker::PhantomData,
+    ops::Deref,
+    sync::{RwLock, RwLockWriteGuard},
+};
 
 use alloc::sync::Arc;
 
 use crate::{
-    Rcu, RcuCore,
+    Rcu, RcuCore, UpdateGuard,
     epoch_counters::{EpochCounter, EpochCounterPool},
 };
 
@@ -70,12 +74,31 @@ unsafe impl<T, P: EpochCounterPool> RcuCore for RwLockArcu<T, P> {
 
 // Safety: the write lock ensures the serialization of the writes
 unsafe impl<T, P: EpochCounterPool> Rcu for RwLockArcu<T, P> {
-    fn try_update<Err>(
-        &self,
-        update: impl FnOnce(&Self::Item) -> Result<Arc<Self::Item>, Err>,
-    ) -> Result<Arc<Self::Item>, Err> {
-        let mut guard = self.active_value.write().unwrap();
-        let new = update(&*guard)?;
-        Ok(std::mem::replace(&mut *guard, new))
+    type UpdateGuard<'a>
+        = RwLockArcuUpdateGuard<'a, Self::Item>
+    where
+        Self: 'a;
+
+    fn update_lock(&self) -> Self::UpdateGuard<'_> {
+        RwLockArcuUpdateGuard(self.active_value.write().unwrap())
+    }
+}
+
+/// UpdateGuard for RwLockArcu
+pub struct RwLockArcuUpdateGuard<'a, T>(RwLockWriteGuard<'a, Arc<T>>);
+
+impl<T> UpdateGuard for RwLockArcuUpdateGuard<'_, T> {
+    type Item = T;
+
+    fn replace(mut self, new: impl Into<Arc<Self::Item>>) -> Arc<Self::Item> {
+        std::mem::replace(&mut *self.0, new.into())
+    }
+}
+
+impl<T> Deref for RwLockArcuUpdateGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

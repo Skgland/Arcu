@@ -2,9 +2,9 @@
 
 extern crate alloc;
 
-#[cfg(feature = "thread_local_counter")]
 use core::ops::Deref;
 use core::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::MutexGuard;
 use std::{marker::PhantomData, sync::Mutex};
 
 use alloc::sync::Arc;
@@ -13,7 +13,7 @@ use alloc::sync::Arc;
 use crate::epoch_counters::GlobalEpochCounterPool;
 
 use crate::epoch_counters::{EpochCounter, EpochCounterPool};
-use crate::{Rcu, RcuCore};
+use crate::{Rcu, RcuCore, UpdateGuard};
 
 /// A Rcu based on an atomic pointer to an [`Arc`] and a [`EpochCounterPool`]
 ///
@@ -48,52 +48,57 @@ impl<T: core::fmt::Debug, P> core::fmt::Debug for StrongAtomicArcu<T, P> {
 // - try_update serialized updated by taking the write mutex lock
 // - default update impl uses try_update
 unsafe impl<T, P: EpochCounterPool> Rcu for StrongAtomicArcu<T, P> {
-    fn try_update<Err>(
-        &self,
-        update: impl FnOnce(&Self::Item) -> Result<Arc<Self::Item>, Err>,
-    ) -> Result<Arc<Self::Item>, Err> {
-        let write_guard = self.write.lock();
-        let arc_ptr = self.active_value.load(Ordering::Acquire);
+    type UpdateGuard<'a>
+        = StrongAtomicArcuUpdateGuard<'a, T, P>
+    where
+        Self: 'a;
 
-        // Safety: See comments inside the block
-        let old: Arc<T> = unsafe {
-            // Safety:
-            // - the ptr was created in Rcu::new or Rcu::replace with Arc::into_raw
-            // - the Rcu is responsible for one of the arc's strong references
-            // - the Rcu is alive as this function takes a reference to the Rcu
-            // - we have the write lock so there won't be a concurrent decrement
-            Arc::increment_strong_count(arc_ptr);
-            // Safety:
-            // - the ptr was created in Rcu::new or Rcu::replace with Arc::into_raw
-            // - we have just ensured an additional strong count by incrementing the count
-            Arc::from_raw(arc_ptr)
-        };
+    fn update_lock(&self) -> Self::UpdateGuard<'_> {
+        StrongAtomicArcuUpdateGuard {
+            guard: self.write.lock().unwrap(),
+            arcu: self,
+        }
+    }
+}
 
-        let new = update(&old)?;
+/// UpdateGuard for StrongAtomicArcu
+pub struct StrongAtomicArcuUpdateGuard<'a, T, P> {
+    arcu: &'a StrongAtomicArcu<T, P>,
+    guard: MutexGuard<'a, ()>,
+}
 
+impl<T, P: EpochCounterPool> UpdateGuard for StrongAtomicArcuUpdateGuard<'_, T, P> {
+    type Item = T;
+
+    fn replace(self, new: impl Into<Arc<Self::Item>>) -> Arc<Self::Item> {
         // exchange old and new
         // the rcu is now responsible for freeing the last strong count of new
         // in turn we must release one strong count of old while ensuring that we
         // don't release the last strong count while readers are still in the critical section
-        let old2 = self
+        let old = self
+            .arcu
             .active_value
-            .swap(Arc::into_raw(new).cast_mut(), Ordering::Release);
+            .swap(Arc::into_raw(new.into()).cast_mut(), Ordering::Release);
 
-        // verify that old and old2 point to the same arc
-        // this should always hold as we have the write lock
-        // so only check when debug assertions are enabled
-        debug_assert_eq!(old2, arc_ptr);
+        drop(self.guard);
+
+        self.arcu.epoch_counter_pool.wait_for_epochs();
 
         // Safety:
-        //  - we got one strong count from swapping with new (in exchange for a strong count of old aka. old2)
-        //  - the arc is still kept alive by old so this won't invalidate readers in the rcs
-        unsafe { Arc::decrement_strong_count(old2) };
+        //  - we got one strong count from swapping with new (in exchange for a strong count of old)
+        unsafe { Arc::from_raw(old) }
+    }
+}
 
-        drop(write_guard);
+impl<T, P> Deref for StrongAtomicArcuUpdateGuard<'_, T, P> {
+    type Target = T;
 
-        self.epoch_counter_pool.wait_for_epochs();
-
-        Ok(old)
+    fn deref(&self) -> &Self::Target {
+        // safety:
+        // - while this guard is alive only this guard may change this value
+        // - for this guard to change the value it needs to be borrowed mutable
+        // - while this shared borrow is alive self can't be borrowed mutable
+        unsafe { &*self.arcu.active_value.load(Ordering::Acquire) }
     }
 }
 

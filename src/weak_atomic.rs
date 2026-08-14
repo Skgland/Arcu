@@ -91,10 +91,9 @@ unsafe impl<T, P: EpochCounterPool> RcuCore for WeakAtomicArcu<T, P> {
 
     #[inline]
     fn replace(&self, new_value: impl Into<Arc<T>>) -> Arc<T> {
-        let arc_ptr = self.active_value.swap(
-            Arc::into_raw(new_value.into()).cast_mut(),
-            Ordering::Acquire,
-        );
+        let arc_ptr = self
+            .active_value
+            .swap(Arc::into_raw(new_value.into()).cast_mut(), Ordering::AcqRel);
         self.epoch_counter_pool.wait_for_epochs();
 
         // Safety:

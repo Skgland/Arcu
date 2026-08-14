@@ -77,6 +77,12 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
+    - name: Setup miri
+      if: matrix.channel == 'nightly'
+      run: cargo miri setup
+
     - name: Run miri
       if: matrix.channel == 'nightly'
+      env:
+        MIRIFLAGS: "-Zmiri-many-seeds"
       run: cargo miri test --verbose
