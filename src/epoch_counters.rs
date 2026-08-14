@@ -12,11 +12,13 @@ use core::sync::atomic::{AtomicU8, Ordering};
 static GLOBAL_EPOCH_COUNTERS: std::sync::RwLock<Vec<alloc::sync::Weak<EpochCounter>>> =
     std::sync::RwLock::new(Vec::new());
 
+/// Register an EpochCounter with the global epoch counter pool
 #[cfg(feature = "global_counters")]
 pub fn register_epoch_counter(epoch_counter: alloc::sync::Weak<EpochCounter>) {
     GLOBAL_EPOCH_COUNTERS.write().unwrap().push(epoch_counter)
 }
 
+/// Get a list containing the epoch counters currently registered with the global epoch counter pool
 #[cfg(feature = "global_counters")]
 pub fn global_counters() -> Vec<::alloc::sync::Weak<EpochCounter>> {
     GLOBAL_EPOCH_COUNTERS.read().unwrap().clone()
@@ -30,9 +32,11 @@ thread_local! {
     static THREAD_EPOCH_COUNTER: std::cell::OnceCell<std::sync::Arc<EpochCounter>> = const { std::cell::OnceCell::new() };
 }
 
+/// The global epoch counter pool
 #[cfg(feature = "global_counters")]
 pub struct GlobalEpochCounterPool;
 
+// safety: this properly waits for the epoch counters
 #[cfg(feature = "global_counters")]
 unsafe impl EpochCounterPool for GlobalEpochCounterPool {
     fn wait_for_epochs(&self) {
@@ -55,7 +59,7 @@ pub(crate) fn with_thread_local_epoch_counter<T>(fun: impl FnOnce(&EpochCounter)
             epoch_counter
         });
 
-        fun(&epoch_counter)
+        fun(epoch_counter)
     })
 }
 
